@@ -55,10 +55,6 @@ class FakeSportmonksClient:
             self.assert_include(params, FIXTURE_INCLUDES)
             return {"data": self.fixture(include_detail=True)}
 
-        if path == "players/search/Bruno%20Fernandes":
-            self.assert_include(params, PLAYER_INCLUDES)
-            return {"data": [{"id": 100, "name": "Bruno Fernandes"}]}
-
         if path in {"players/100", "players/1878"}:
             self.assert_include(params, PLAYER_INCLUDES)
             player_id = int(path.split("/")[-1])
@@ -116,6 +112,10 @@ class FakeSportmonksClient:
         if path == "fixtures/seasons/318":
             self.assert_include(params, FIXTURE_INCLUDES)
             return [self.fixture(include_detail=False)]
+
+        if path == "players/search/Bruno%20Fernandes":
+            self.assert_include(params, PLAYER_INCLUDES)
+            return [{"id": 100, "name": "Bruno Fernandes"}]
 
         if path == "statistics/seasons/teams/14":
             self.assert_include(params, "season;details;details.type")
