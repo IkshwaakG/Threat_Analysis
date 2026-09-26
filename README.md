@@ -1,25 +1,44 @@
-# GoodGame data foundation
+# GoodGame football data
 
-Install the provider dependency with `python -m pip install -r requirements.txt`.
+GoodGame can use Sportmonks for current fixtures and StatsBomb for open historical event data. Sportmonks is the default provider.
 
-Discover matches for any SofaScore tournament and season, then analyze a selected match:
+## Sportmonks
 
-```python
-from goodgame.ingestion.sofascore.client import SofaScoreClient
-from goodgame.ingestion.sofascore.matches import fetch_season_matches
-from goodgame.pipeline import GoodGamePipeline
+The token previously pasted into chat should be revoked and replaced. Set the rotated token locally in your shell; do not paste it into chat or commit it:
 
-client = SofaScoreClient()
-matches = fetch_season_matches(client, tournament_id=17, season_id=52186)
-print([(match.id, match.home_team.name, match.away_team.name) for match in matches])
-
-analysis = GoodGamePipeline(client).analyze_match(match_id=YOUR_MATCH_ID)
-for insight in analysis.insights:
-    print(insight.start_minute, insight.title, insight.summary)
+```sh
+source .venv/bin/activate
+pip install -r requirements.txt
+export SPORTMONKS_API_TOKEN="your-rotated-sportmonks-token"
+python -m goodgame
 ```
 
-The pipeline retrieves match details, incidents, lineups, and shot-map data. Its initial story rules report supported goals, substitutions, and cards; they do not infer tactical causes from aggregate statistics. `MatchAnalysis` keeps the normalized match, events, insights, lineups, and shots together for later API or visualization use.
+Choose a competition and season, then select a fixture. For a known Sportmonks fixture ID:
 
-`goodgame/ingestion/sofascore/players.py` and `teams.py` contain the generic squad, profile-link, and statistics helpers. Their default competition and season are Premier League 2023-24; pass `tournament_id` and `season_id` for another competition or season.
+```sh
+python -m goodgame --provider sportmonks --match-id FIXTURE_ID
+```
 
-Run the tests with `python -m unittest discover -s tests -v` after installing requirements. SofaScore may change or restrict its public API, so provider endpoint compatibility should be verified against an accessible match before production use.
+The integration uses Sportmonks Football API v3. It requests fixture details, participants, scores, events, lineups, statistics, and fixture expected-goal data where available. Actual includes and coverage depend on your plan; the token is sent in the `Authorization` header, not the URL. Spatial event/shot detail is not yet normalized or guaranteed by this adapter.
+
+## Switch Providers
+
+Set `GOODGAME_PROVIDER` to change the default, or use `--provider` for one run:
+
+```sh
+export GOODGAME_PROVIDER=statsbomb
+python -m goodgame
+python -m goodgame --provider sportmonks
+```
+
+StatsBomb remains available for historical Open Data and its team/player season aggregations. Both providers support team season stats. Sportmonks player stats use the account-visible player search and nested season statistics; available metrics vary by subscription.
+
+```sh
+python -m goodgame --provider statsbomb --competition-id 9 --season-id 281 --match-id 3895232
+python -m goodgame --provider statsbomb --team-stats "Bayer Leverkusen" --competition-id 9 --season-id 281
+python -m goodgame --provider statsbomb --player-stats "Florian Wirtz" --competition-id 9 --season-id 281
+```
+
+StatsBomb Open Data only contains a limited set of historical competitions. Authenticated StatsBomb credentials can be configured separately with `SB_USERNAME` and `SB_PASSWORD`; access remains subject to your license.
+
+Run tests with `python -m unittest discover -s tests -v`. Use `python -m goodgame --help` for CLI options.

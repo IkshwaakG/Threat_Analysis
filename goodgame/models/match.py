@@ -1,6 +1,7 @@
 """Normalized match and team data."""
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
@@ -58,4 +59,32 @@ class Match:
             start_timestamp=payload.get("startTimestamp"),
             tournament_id=unique_tournament.get("id", tournament.get("id")),
             season_id=season.get("id"),
+        )
+
+    @classmethod
+    def from_statsbomb_payload(cls, payload: Mapping[str, Any]) -> "Match":
+        start_timestamp = None
+        match_date = payload.get("match_date")
+        kick_off = payload.get("kick_off")
+        if match_date and kick_off:
+            try:
+                start = datetime.fromisoformat(f"{match_date}T{kick_off}")
+                start_timestamp = int(start.replace(tzinfo=timezone.utc).timestamp())
+            except ValueError:
+                pass
+
+        return cls(
+            id=int(payload["match_id"]),
+            home_team=Team(
+                id=int(payload["home_team_id"]), name=str(payload["home_team"])
+            ),
+            away_team=Team(
+                id=int(payload["away_team_id"]), name=str(payload["away_team"])
+            ),
+            home_score=_score_value(payload.get("home_score")),
+            away_score=_score_value(payload.get("away_score")),
+            status=str(payload.get("match_status", "unknown")),
+            start_timestamp=start_timestamp,
+            tournament_id=_score_value(payload.get("competition_id")),
+            season_id=_score_value(payload.get("season_id")),
         )

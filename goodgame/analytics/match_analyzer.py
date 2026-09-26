@@ -48,10 +48,11 @@ class MatchAnalyzer:
                 summary = f"{team} made a substitution at {_minute_label(minute)}.{change}"
                 impact = "medium"
             elif category == "card":
-                card_type = str(event.incident_class or event.text).lower()
+                card_type = str(event.incident_class or event.text).replace("_", " ").lower()
+                card_label = card_type if card_type.endswith("card") else f"{card_type} card"
                 title = "Red card" if "red" in card_type else "Card"
                 player = f" to {event.player}" if event.player else ""
-                summary = f"{team} received a {card_type} card{player} at {_minute_label(minute)}."
+                summary = f"{team} received a {card_label}{player} at {_minute_label(minute)}."
                 impact = "high" if "red" in card_type else "low"
             else:
                 continue

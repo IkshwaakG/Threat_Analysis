@@ -1,62 +1,51 @@
 import unittest
 
+from goodgame.models.event import Event
+from goodgame.models.match import Match
 from goodgame.pipeline import GoodGamePipeline
 
 
-class FakeSofaScoreClient:
-    def __init__(self):
-        self.paths = []
+class FakeProvider:
+    def get_match(self, match_id):
+        return Match.from_statsbomb_payload(
+            {
+                "match_id": match_id,
+                "home_team_id": 1,
+                "home_team": "Manchester United",
+                "away_team_id": 2,
+                "away_team": "Arsenal",
+                "home_score": 2,
+                "away_score": 1,
+            }
+        )
 
-    def get_json(self, path, params=None):
-        self.paths.append(path)
-        if path == "event/42":
-            return {
-                "event": {
-                    "id": 42,
-                    "homeTeam": {"id": 1, "name": "Manchester United"},
-                    "awayTeam": {"id": 2, "name": "Arsenal"},
-                    "homeScore": {"current": 2},
-                    "awayScore": {"current": 1},
-                    "status": {"description": "Ended"},
-                }
-            }
-        if path == "event/42/incidents":
-            return {
-                "incidents": [
-                    {
-                        "id": 100,
-                        "incidentType": "goal",
-                        "time": 84,
-                        "isHome": True,
-                        "player": {"name": "Bruno Fernandes"},
-                        "homeScore": 2,
-                        "awayScore": 1,
-                        "text": "Goal",
-                    }
-                ]
-            }
-        if path == "event/42/lineups":
-            return {"home": {"formation": "4-2-3-1"}, "away": {"formation": "4-3-3"}}
-        if path == "event/42/shotmap":
-            return {"shotmap": [{"player": {"name": "Bruno Fernandes"}, "time": 84}]}
-        raise AssertionError(f"Unexpected endpoint: {path}")
+    def get_events(self, match_id):
+        return [
+            Event(
+                id="goal-id",
+                minute=84,
+                incident_type="goal",
+                text="Goal",
+                is_home=True,
+                player="Bruno Fernandes",
+                home_score=2,
+                away_score=1,
+            )
+        ]
+
+    def get_lineups(self, match_id):
+        return {"home": {"formation": "4-2-3-1"}, "away": {"formation": "4-3-3"}}
+
+    def get_shot_map(self, match_id):
+        return [{"player": "Bruno Fernandes", "time": 84}]
 
 
 class GoodGamePipelineTests(unittest.TestCase):
     def test_fetches_match_resources_and_builds_story(self):
-        client = FakeSofaScoreClient()
+        provider = FakeProvider()
 
-        analysis = GoodGamePipeline(client=client).analyze_match(42)
+        analysis = GoodGamePipeline(provider=provider).analyze_match(42)
 
-        self.assertEqual(
-            client.paths,
-            [
-                "event/42",
-                "event/42/incidents",
-                "event/42/lineups",
-                "event/42/shotmap",
-            ],
-        )
         self.assertEqual(analysis.match.home_team.name, "Manchester United")
         self.assertEqual(analysis.insights[0].title, "Goal sequence")
         self.assertEqual(analysis.lineups["home"]["formation"], "4-2-3-1")

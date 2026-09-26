@@ -1,6 +1,6 @@
 """Analysis output models suitable for API and visualization layers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from goodgame.models.event import Event
@@ -24,5 +24,5 @@ class MatchAnalysis:
     match: Match
     events: tuple[Event, ...]
     insights: tuple[Insight, ...]
-    lineups: dict[str, Any]
-    shots: tuple[dict[str, Any], ...]
+    lineups: dict[str, Any] = field(default_factory=dict)
+    shots: tuple[dict[str, Any], ...] = ()

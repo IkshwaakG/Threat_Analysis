@@ -1,32 +1,36 @@
 """Orchestrate one-match ingestion and analysis."""
 
+from collections.abc import Sequence
+
 from goodgame.analytics.match_analyzer import MatchAnalyzer
-from goodgame.ingestion.sofascore.client import SofaScoreClient
-from goodgame.ingestion.sofascore.events import fetch_match_events
-from goodgame.ingestion.sofascore.lineups import fetch_lineups
-from goodgame.ingestion.sofascore.matches import fetch_match
-from goodgame.ingestion.sofascore.shots import fetch_shot_map
+from goodgame.ingestion.provider import MatchDataProvider
 from goodgame.models.insight import MatchAnalysis
 
 
 class GoodGamePipeline:
     def __init__(
         self,
-        client: SofaScoreClient | None = None,
-        analyzer: MatchAnalyzer | None = None,
+        provider: MatchDataProvider,
+        analyzers: Sequence[MatchAnalyzer] | None = None,
     ) -> None:
-        self.client = client or SofaScoreClient()
-        self.analyzer = analyzer or MatchAnalyzer()
+        self.provider = provider
+        if analyzers is not None:
+            self.analyzers = tuple(analyzers)
+        else:
+            self.analyzers = (MatchAnalyzer(),)
 
     def analyze_match(self, match_id: int) -> MatchAnalysis:
-        match = fetch_match(self.client, match_id)
-        events = fetch_match_events(self.client, match_id)
-        lineups = fetch_lineups(self.client, match_id)
-        shots = fetch_shot_map(self.client, match_id)
+        match = self.provider.get_match(match_id)
+        events = self.provider.get_events(match_id)
+        insights = tuple(
+            insight
+            for current_analyzer in self.analyzers
+            for insight in current_analyzer.analyze(match, events)
+        )
         return MatchAnalysis(
             match=match,
             events=tuple(events),
-            insights=self.analyzer.analyze(match, events),
-            lineups=lineups,
-            shots=tuple(shots),
+            insights=insights,
+            lineups=self.provider.get_lineups(match_id),
+            shots=tuple(self.provider.get_shot_map(match_id)),
         )

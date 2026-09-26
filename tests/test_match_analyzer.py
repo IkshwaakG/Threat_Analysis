@@ -57,6 +57,23 @@ class MatchAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(MatchAnalyzer().analyze(self.match, events), ())
 
+    def test_card_type_with_card_suffix_is_not_duplicated(self):
+        event = Event.from_payload(
+            {
+                "incidentType": "card",
+                "incidentClass": "Yellow Card",
+                "time": 35,
+                "isHome": False,
+                "player": {"name": "Defender"},
+                "text": "Yellow Card",
+            }
+        )
+
+        insight = MatchAnalyzer().analyze(self.match, [event])[0]
+
+        self.assertIn("yellow card to Defender", insight.summary)
+        self.assertNotIn("card card", insight.summary)
+
 
 if __name__ == "__main__":
     unittest.main()
