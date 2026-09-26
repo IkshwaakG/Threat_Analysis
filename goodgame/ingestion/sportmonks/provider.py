@@ -1,260 +1,197 @@
-"""Sportmonks implementation of GoodGame's normalized match provider."""
+"""Sportmonks implementation of GoodGame's normalized provider contract.
 
-from datetime import datetime
-import re
+HTTP request construction lives in requests.py.
+Raw-response parsing/normalization lives in responses.py.
+This provider coordinates the two layers and exposes GoodGame-friendly methods.
+"""
+
+from __future__ import annotations
+
 from typing import Any
-from urllib.parse import quote
 
 from goodgame.ingestion.provider import MatchDataProvider
 from goodgame.ingestion.sportmonks.client import SportmonksClient
+from goodgame.ingestion.sportmonks.requests import SportmonksRequests
+from goodgame.ingestion.sportmonks.responses import (
+    fixture_events,
+    fixture_lineups,
+    fixture_shots,
+    fixture_to_match,
+    integer,
+    name,
+    normalize_player_statistics,
+    normalize_team_statistics,
+    season_key,
+    scalar_statistics,
+)
 from goodgame.models.event import Event
-from goodgame.models.match import Match, Team
-
-
-def _name(value: Any) -> str | None:
-    if isinstance(value, dict):
-        return value.get("name")
-    return value if isinstance(value, str) else None
-
-
-def _integer(value: Any) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _slug(value: Any) -> str:
-    return "_".join(
-        part for part in "".join(
-            character.lower() if character.isalnum() else " " for character in str(value)
-        ).split()
-        if part
-    )
-
-
-def _details_statistics(details: Any) -> dict[str, Any]:
-    results: dict[str, Any] = {}
-    if not isinstance(details, list):
-        return results
-    for detail in details:
-        if not isinstance(detail, dict):
-            continue
-        stat_name = _name(detail.get("type")) or f"stat_{detail.get('type_id', 'unknown')}"
-        value = detail.get("value")
-        if isinstance(value, dict):
-            if "total" in value:
-                value = value["total"]
-            elif "value" in value:
-                value = value["value"]
-        results[_slug(stat_name)] = value
-    return results
-
-
-def _season_key(value: Any) -> str:
-    parts = re.findall(r"\d{2,4}", str(value))
-    if not parts:
-        return str(value).strip().casefold()
-    start = int(parts[0])
-    if len(parts[0]) == 2:
-        start += 2000 if start < 70 else 1900
-    if len(parts) == 1:
-        return str(start)
-    end = int(parts[1])
-    if len(parts[1]) == 2:
-        end += start // 100 * 100
-        if end < start:
-            end += 100
-    return f"{start}/{end}"
-
-
-_PLAYER_INCLUDES = (
-    "nationality;detailedPosition;statistics.details.type;metadata.type;"
-    "trophies.trophy;trophies.team;teams.team;statistics.team;statistics.season.league;"
-    "latest.fixture.participants;statistics.details.type;latest.fixture.league;"
-    "latest.fixture.scores;latest.details.type;trophies.league;trophies.season"
-)
-
-_FIXTURE_INCLUDES = (
-    "state;participants;venue;scores;weatherReport;league;events.player;"
-    "statistics.type;events.type;events.period;sidelined.sideline.player;"
-    "sidelined.sideline.type"
-)
-
-
-def _timestamp(fixture: dict[str, Any]) -> int | None:
-    stamp = _integer(fixture.get("starting_at_timestamp"))
-    if stamp is not None:
-        return stamp
-    value = fixture.get("starting_at")
-    if not value:
-        return None
-    try:
-        return int(datetime.fromisoformat(str(value)).timestamp())
-    except ValueError:
-        return None
-
-
-def _participants(fixture: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    home = away = None
-    for participant in fixture.get("participants", []):
-        if not isinstance(participant, dict):
-            continue
-        location = (participant.get("meta") or {}).get("location")
-        if location == "home":
-            home = participant
-        elif location == "away":
-            away = participant
-    return home, away
-
-
-def _current_scores(
-    fixture: dict[str, Any], home: dict[str, Any], away: dict[str, Any]
-) -> tuple[int | None, int | None]:
-    scores: dict[int, int] = {}
-    for item in fixture.get("scores", []):
-        if not isinstance(item, dict):
-            continue
-        participant_id = _integer(item.get("participant_id"))
-        score = item.get("score") or {}
-        value = _integer(score.get("goals")) if isinstance(score, dict) else _integer(score)
-        if participant_id is not None and value is not None:
-            scores[participant_id] = value
-    return scores.get(int(home["id"])), scores.get(int(away["id"]))
-
-
-def _match_from_fixture(fixture: dict[str, Any]) -> Match:
-    home, away = _participants(fixture)
-    if home is None or away is None:
-        raise ValueError(f"Sportmonks fixture {fixture.get('id')} is missing participants")
-    home_score, away_score = _current_scores(fixture, home, away)
-    state = fixture.get("state") or {}
-    league = fixture.get("league") or {}
-    season = fixture.get("season") or {}
-    return Match(
-        id=int(fixture["id"]),
-        home_team=Team(id=int(home["id"]), name=str(home.get("name", "Home"))),
-        away_team=Team(id=int(away["id"]), name=str(away.get("name", "Away"))),
-        home_score=home_score,
-        away_score=away_score,
-        status=str(state.get("name", "unknown")),
-        start_timestamp=_timestamp(fixture),
-        tournament_id=_integer(fixture.get("league_id", league.get("id"))),
-        season_id=_integer(fixture.get("season_id", season.get("id"))),
-    )
-
-
-def _event_from_fixture(event: dict[str, Any], match: Match) -> Event:
-    event_type = _name(event.get("type")) or str(event.get("type_name") or event.get("info") or "event")
-    normalized_type = event_type.casefold()
-    if "goal" in normalized_type:
-        kind = "goal"
-    elif "substitution" in normalized_type:
-        kind = "substitution"
-    elif "card" in normalized_type:
-        kind = "card"
-    elif "shot" in normalized_type:
-        kind = "shot"
-    else:
-        kind = normalized_type.replace(" ", "_")
-
-    participant_id = _integer(event.get("participant_id"))
-    player = _name(event.get("player")) or event.get("player_name")
-    player_in = _name(event.get("relatedPlayer")) or _name(event.get("related_player"))
-    result = event.get("result")
-    text = str(event.get("info") or event.get("addition") or event_type)
-    if kind == "goal" and player:
-        text = f"Goal by {player}"
-
-    return Event(
-        id=event.get("id"),
-        minute=_integer(event.get("minute")),
-        incident_type=kind,
-        text=text,
-        is_home=(participant_id == match.home_team.id) if participant_id is not None else None,
-        player=player,
-        player_in=player_in,
-        player_out=player if kind == "substitution" else None,
-        incident_class=str(result) if kind == "card" and result is not None else None,
-        raw=dict(event),
-    )
+from goodgame.models.match import Match
 
 
 class SportmonksProvider(MatchDataProvider):
-    def __init__(self, client: SportmonksClient | None = None) -> None:
+    def __init__(
+        self,
+        client: SportmonksClient | None = None,
+        requests_api: SportmonksRequests | None = None,
+        competition_id: int | None = None,
+        season_id: int | None = None,
+    ) -> None:
         self.client = client or SportmonksClient()
-        self._seasons: list[dict[str, Any]] | None = None
-        self._season_fixtures: dict[int, list[dict[str, Any]]] = {}
+        self.api = requests_api or SportmonksRequests(self.client)
+        self.competition_id = competition_id
+        self.season_id = season_id
         self._fixtures: dict[int, dict[str, Any]] = {}
         self._matches: dict[int, Match] = {}
 
+    # ---------- League / season ----------
+
+    def list_leagues(self) -> list[dict[str, Any]]:
+        return self.api.list_leagues()
+
+    def get_league(self, league_id: int) -> dict[str, Any]:
+        return self.api.get_league(league_id)
+
+    def search_leagues(self, name_value: str) -> list[dict[str, Any]]:
+        return self.api.search_leagues(name_value)
+
     def list_competitions(self) -> list[dict[str, Any]]:
-        if self._seasons is None:
-            rows = self.client.get_all("seasons", {"include": "league", "per_page": 50})
-            self._seasons = [
-                {
-                    "competition_id": row.get("league_id"),
-                    "season_id": row.get("id"),
-                    "competition_name": _name(row.get("league")) or row.get("league_name"),
-                    "season_name": row.get("name"),
-                }
-                for row in rows
-                if row.get("league_id") is not None and row.get("id") is not None
-            ]
-        return self._seasons
+        rows = self.api.list_seasons()
+        return [
+            {
+                "competition_id": row.get("league_id"),
+                "season_id": row.get("id"),
+                "competition_name": name(row.get("league")) or row.get("league_name"),
+                "season_name": row.get("name"),
+            }
+            for row in rows
+            if row.get("league_id") is not None and row.get("id") is not None
+        ]
 
-    def _get_player_records(self, player: str | int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        if isinstance(player, int) or str(player).strip().isdigit():
-            player_id = int(player)
-        else:
-            payload = self.client.get_json(
-                f"players/search/{quote(str(player).strip(), safe='')}"
-            )
-            data = payload.get("data")
-            candidates = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
-            requested = " ".join(str(player).casefold().split())
-            exact = [
-                item for item in candidates
-                if isinstance(item, dict)
-                and any(
-                    " ".join(str(item.get(field, "")).casefold().split()) == requested
-                    for field in ("name", "display_name", "common_name")
-                )
-            ]
-            candidates = exact or [item for item in candidates if isinstance(item, dict)]
-            if not candidates:
-                raise LookupError(f"Player not found in Sportmonks account coverage: {player}")
-            if len(candidates) > 1:
-                names = ", ".join(str(item.get("name", item.get("id"))) for item in candidates[:5])
-                raise LookupError(f"Player search is ambiguous; select a player ID: {names}")
-            player_id = _integer(candidates[0].get("id"))
-            if player_id is None:
-                raise LookupError(f"Sportmonks player search returned no player ID for {player}")
+    def get_season(self, season_id: int) -> dict[str, Any]:
+        return self.api.get_season(season_id)
 
-        payload = self.client.get_json(
-            f"players/{player_id}", {"include": _PLAYER_INCLUDES}
-        )
-        data = payload.get("data")
-        candidates = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    # ---------- Team ----------
+
+    def list_teams(self, season_id: int | None = None) -> list[dict[str, Any]]:
+        selected_season = season_id or self.season_id
+        if selected_season is not None:
+            return self.api.list_teams_by_season(selected_season)
+        return self.api.list_teams()
+
+    def get_team(self, team_id: int) -> dict[str, Any]:
+        return self.api.get_team(team_id)
+
+    def search_teams(self, team_name: str) -> list[dict[str, Any]]:
+        return self.api.search_teams(team_name)
+
+    def get_team_current_leagues(self, team_id: int) -> list[dict[str, Any]]:
+        return self.api.get_team_current_leagues(team_id)
+
+    def get_team_all_leagues(self, team_id: int) -> list[dict[str, Any]]:
+        return self.api.get_team_all_leagues(team_id)
+
+    def get_team_squad(
+        self, team_id: int, season_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        selected_season = season_id or self.season_id
+        if selected_season is None:
+            raise ValueError("season_id is required for squad retrieval")
+        return self.api.get_team_squad(selected_season, team_id)
+
+    def get_team_statistics(
+        self,
+        team: str | int,
+        competition_id: int | None = None,
+        season_id: int | None = None,
+    ) -> dict[str, Any]:
+        selected_season = season_id or self.season_id
+        selected_competition = competition_id or self.competition_id
+        if selected_season is None:
+            raise ValueError("Choose a season before requesting team stats")
+
+        standings = self.api.get_standings(selected_season)
+        requested = str(team).strip().casefold()
+
         selected = next(
             (
-                item for item in candidates
-                if isinstance(item, dict) and _integer(item.get("id")) == player_id
+                row
+                for row in standings
+                if isinstance(row, dict)
+                and (
+                    integer(team) == integer(row.get("participant_id"))
+                    if str(team).strip().isdigit()
+                    else str(name(row.get("participant")) or "")
+                    .strip()
+                    .casefold()
+                    == requested
+                )
             ),
             None,
         )
         if selected is None:
-            raise LookupError(f"Player ID {player_id} was not found in Sportmonks response")
-        statistics = selected.get("statistics", []) or []
-        return selected, [row for row in statistics if isinstance(row, dict)]
+            raise LookupError(
+                f"Team not found in Sportmonks season {selected_season}: {team}"
+            )
 
-    @staticmethod
-    def _stat_team(record: dict[str, Any]) -> dict[str, Any]:
-        return record.get("team") if isinstance(record.get("team"), dict) else {}
+        team_id = integer(selected.get("participant_id"))
+        if team_id is None:
+            raise LookupError(f"Sportmonks standing has no team ID for {team}")
 
-    @staticmethod
-    def _stat_season(record: dict[str, Any]) -> dict[str, Any]:
-        return record.get("season") if isinstance(record.get("season"), dict) else {}
+        season_records = self.api.get_team_season_statistics(team_id)
+        return normalize_team_statistics(
+            selected,
+            season_records,
+            competition_id=selected_competition,
+            season_id=selected_season,
+            standings_count=len(standings),
+            team_name=str(team),
+        )
+
+    # ---------- Player ----------
+
+    def list_players(self) -> list[dict[str, Any]]:
+        return self.api.list_players()
+
+    def get_player(self, player_id: int) -> dict[str, Any]:
+        return self.api.get_player(player_id)
+
+    def search_players(self, player_name: str) -> list[dict[str, Any]]:
+        return self.api.search_players(player_name)
+
+    def _resolve_player(self, player: str | int) -> dict[str, Any]:
+        if isinstance(player, int) or str(player).strip().isdigit():
+            return self.api.get_player(int(player))
+
+        candidates = self.api.search_players(str(player))
+        requested = " ".join(str(player).casefold().split())
+        exact = [
+            item
+            for item in candidates
+            if any(
+                " ".join(str(item.get(field, "")).casefold().split()) == requested
+                for field in ("name", "display_name", "common_name")
+            )
+        ]
+        candidates = exact or candidates
+
+        if not candidates:
+            raise LookupError(
+                f"Player not found in Sportmonks account coverage: {player}"
+            )
+        if len(candidates) > 1:
+            names = ", ".join(
+                str(item.get("name", item.get("id"))) for item in candidates[:5]
+            )
+            raise LookupError(
+                f"Player search is ambiguous; select a player ID: {names}"
+            )
+
+        player_id = integer(candidates[0].get("id"))
+        if player_id is None:
+            raise LookupError(
+                f"Sportmonks player search returned no player ID for {player}"
+            )
+        return self.api.get_player(player_id)
 
     def get_player_statistics(
         self,
@@ -263,43 +200,19 @@ class SportmonksProvider(MatchDataProvider):
         competition_id: int | None = None,
         season_id: int | None = None,
     ) -> dict[str, Any]:
-        player_record, records = self._get_player_records(player)
-        filtered = []
-        for record in records:
-            season = self._stat_season(record)
-            stat_team = self._stat_team(record)
-            league = season.get("league") if isinstance(season.get("league"), dict) else {}
-            if season_id is not None and _integer(record.get("season_id", season.get("id"))) != season_id:
-                continue
-            if competition_id is not None and _integer(league.get("id", season.get("league_id"))) != competition_id:
-                continue
-            if team is not None and " ".join(str(stat_team.get("name", "")).casefold().split()) != " ".join(team.casefold().split()):
-                continue
-            filtered.append((record, season, stat_team, league))
-        if not filtered:
-            raise LookupError(
-                f"No Sportmonks season statistics found for player {player} "
-                "with the selected team/competition/season filters"
-            )
-
-        result: dict[str, Any] = {
-            "player_id": player_record.get("id"),
-            "player_name": player_record.get("name") or player_record.get("display_name"),
-            "team_id": None,
-            "team_name": None,
-            "season_id": season_id,
-            "competition_id": competition_id,
-        }
-        for record, season, stat_team, league in filtered:
-            if result["team_id"] is None:
-                result["team_id"] = record.get("team_id", stat_team.get("id"))
-                result["team_name"] = stat_team.get("name")
-            result["season_id"] = record.get("season_id", season.get("id"))
-            result["season_name"] = season.get("name")
-            result["competition_id"] = league.get("id", season.get("league_id"))
-            result["competition_name"] = league.get("name")
-            result.update(_details_statistics(record.get("details")))
-        return result
+        record = self._resolve_player(player)
+        statistics = [
+            row
+            for row in (record.get("statistics", []) or [])
+            if isinstance(row, dict)
+        ]
+        return normalize_player_statistics(
+            record,
+            statistics,
+            team=team,
+            competition_id=competition_id,
+            season_id=season_id,
+        )
 
     def get_player_statistics_all_leagues(
         self,
@@ -307,188 +220,176 @@ class SportmonksProvider(MatchDataProvider):
         player: str | int,
         team: str | None = None,
     ) -> dict[str, Any]:
-        player_record, records = self._get_player_records(player)
-        season_key = _season_key(season_name)
-        selected = []
-        for record in records:
-            season = self._stat_season(record)
-            stat_team = self._stat_team(record)
-            league = season.get("league") if isinstance(season.get("league"), dict) else {}
-            if _season_key(season.get("name", "")) != season_key:
-                continue
-            if team is not None and " ".join(str(stat_team.get("name", "")).casefold().split()) != " ".join(team.casefold().split()):
-                continue
-            selected.append((record, season, stat_team, league))
-        if not selected:
-            raise LookupError(f"No Sportmonks statistics found for {player} in {season_name}")
+        record = self._resolve_player(player)
+        statistics = [
+            row
+            for row in (record.get("statistics", []) or [])
+            if isinstance(row, dict)
+        ]
 
-        stats: dict[str, Any] = {}
+        wanted_season = season_key(season_name)
+        wanted_team = " ".join(team.casefold().split()) if team else None
+        selected: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+
+        for stat in statistics:
+            season = stat.get("season") if isinstance(stat.get("season"), dict) else {}
+            stat_team = stat.get("team") if isinstance(stat.get("team"), dict) else {}
+            league = season.get("league") if isinstance(season.get("league"), dict) else {}
+
+            if season_key(season.get("name", "")) != wanted_season:
+                continue
+            if wanted_team and " ".join(
+                str(stat_team.get("name", "")).casefold().split()
+            ) != wanted_team:
+                continue
+            selected.append((stat, season, stat_team, league))
+
+        if not selected:
+            raise LookupError(
+                f"No Sportmonks statistics found for {player} in {season_name}"
+            )
+
+        merged: dict[str, Any] = {}
         competitions: set[str] = set()
         teams: set[str] = set()
-        for record, season, stat_team, league in selected:
-            competitions.add(str(league.get("name", league.get("id", "Unknown competition"))))
+
+        for stat, _season, stat_team, league in selected:
+            competitions.add(
+                str(league.get("name", league.get("id", "Unknown competition")))
+            )
             if stat_team.get("name"):
                 teams.add(str(stat_team["name"]))
-            for key, value in _details_statistics(record.get("details")).items():
+            for key, value in scalar_statistics(stat.get("details")).items():
                 if isinstance(value, (int, float)):
-                    stats[key] = stats.get(key, 0) + value
+                    merged[key] = merged.get(key, 0) + value
                 else:
-                    stats[key] = value
-        stats.update(
-            player_id=player_record.get("id"),
-            player_name=player_record.get("name") or player_record.get("display_name"),
+                    merged[key] = value
+
+        merged.update(
+            player_id=record.get("id"),
+            player_name=record.get("name") or record.get("display_name"),
             team_name=", ".join(sorted(teams)),
             season_name=season_name,
             competitions=sorted(competitions),
             competition_count=len(competitions),
         )
-        return stats
+        return merged
 
-    def list_matches(self, competition_id: int, season_id: int) -> list[dict[str, Any]]:
-        if season_id not in self._season_fixtures:
-            payload = self.client.get_json(
-                f"seasons/{season_id}",
-                {
-                    "include": "league;fixtures;fixtures.participants;fixtures.scores;fixtures.state",
-                    "per_page": 50,
-                },
-            )
-            season = payload.get("data", {})
-            fixtures = season.get("fixtures", []) if isinstance(season, dict) else []
-            self._season_fixtures[season_id] = [
-                fixture for fixture in fixtures if isinstance(fixture, dict)
-            ]
-        rows = []
-        for fixture in self._season_fixtures[season_id]:
-            if _integer(fixture.get("league_id", competition_id)) != competition_id:
+    # ---------- Fixture / match ----------
+
+    def list_matches(
+        self, competition_id: int, season_id: int
+    ) -> list[dict[str, Any]]:
+        fixtures = self.api.list_fixtures_by_season(season_id)
+        rows: list[dict[str, Any]] = []
+
+        for fixture in fixtures:
+            if integer(fixture.get("league_id")) not in {None, competition_id}:
                 continue
             try:
-                match = _match_from_fixture(fixture)
+                match = fixture_to_match(fixture)
             except (KeyError, TypeError, ValueError):
                 continue
-            rows.append({
-                "match_id": match.id,
-                "match_date": fixture.get("starting_at", ""),
-                "home_team": match.home_team.name,
-                "away_team": match.away_team.name,
-                "home_score": match.home_score,
-                "away_score": match.away_score,
-            })
+
+            self._fixtures[match.id] = fixture
             self._matches[match.id] = match
+            rows.append(
+                {
+                    "match_id": match.id,
+                    "match_date": fixture.get("starting_at", ""),
+                    "home_team": match.home_team.name,
+                    "away_team": match.away_team.name,
+                    "home_score": match.home_score,
+                    "away_score": match.away_score,
+                }
+            )
+
         return rows
 
-    def get_team_statistics(
-        self,
-        team: str | int,
-        competition_id: int | None = None,
-        season_id: int | None = None,
-    ) -> dict[str, Any]:
-        if season_id is None:
-            season_id = self.season_id
-        if competition_id is None:
-            competition_id = self.competition_id
-        if season_id is None:
-            raise ValueError("Choose a season before requesting team stats")
+    def list_fixtures_by_date(self, fixture_date: str) -> list[dict[str, Any]]:
+        return self.api.list_fixtures_by_date(fixture_date)
 
-        standings_payload = self.client.get_json(
-            f"standings/seasons/{season_id}",
-            {"include": "participant;details;details.type"},
+    def list_fixtures_between(
+        self, start_date: str, end_date: str
+    ) -> list[dict[str, Any]]:
+        return self.api.list_fixtures_between(start_date, end_date)
+
+    def list_team_fixtures_between(
+        self, team_id: int, start_date: str, end_date: str
+    ) -> list[dict[str, Any]]:
+        return self.api.list_team_fixtures_between(
+            team_id, start_date, end_date
         )
-        standings = standings_payload.get("data", [])
-        if not isinstance(standings, list):
-            standings = []
-        requested_team = str(team).strip().casefold()
-        selected = next(
-            (
-                row
-                for row in standings
-                if isinstance(row, dict)
-                and (
-                    _integer(team) == _integer(row.get("participant_id"))
-                    if str(team).strip().isdigit()
-                    else str(_name(row.get("participant")) or "").strip().casefold() == requested_team
-                )
-            ),
-            None,
-        )
-        if selected is None:
-            raise LookupError(f"Team not found in Sportmonks season {season_id}: {team}")
 
-        participant = selected.get("participant") or {}
-        team_id = _integer(selected.get("participant_id"))
-        if team_id is None:
-            raise LookupError(f"Sportmonks standing has no team ID for {team}")
-        stats: dict[str, Any] = {
-            "team_id": team_id,
-            "team_name": str(_name(participant) or team),
-            "competition_id": competition_id or selected.get("league_id"),
-            "season_id": season_id,
-            "position": _integer(selected.get("position")) or 0,
-            "standing_teams": len(standings),
-            "points": _integer(selected.get("points")) or 0,
-        }
-        stats.update(_details_statistics(selected.get("details")))
-        stats.setdefault("goal_difference", 0)
-
-        season_statistics = self.client.get_all(
-            f"statistics/seasons/teams/{team_id}",
-            {"include": "season;details;details.type", "per_page": 50},
-        )
-        for record in season_statistics:
-            if _integer(record.get("season_id")) == season_id:
-                stats.update(_details_statistics(record.get("details")))
-        return stats
-
-    def _get_fixture(self, match_id: int) -> dict[str, Any]:
+    def get_fixture(self, match_id: int) -> dict[str, Any]:
         if match_id not in self._fixtures:
-            payload = self.client.get_json(
-                f"fixtures/{match_id}",
-                {"include": _FIXTURE_INCLUDES},
-            )
-            fixture = payload.get("data")
-            if not isinstance(fixture, dict):
-                raise LookupError(f"Sportmonks fixture {match_id} was not found")
-            self._fixtures[match_id] = fixture
+            self._fixtures[match_id] = self.api.get_fixture(match_id)
         return self._fixtures[match_id]
 
     def get_match(self, match_id: int) -> Match:
         if match_id not in self._matches:
-            self._matches[match_id] = _match_from_fixture(self._get_fixture(match_id))
+            self._matches[match_id] = fixture_to_match(
+                self.get_fixture(match_id)
+            )
         return self._matches[match_id]
 
     def get_events(self, match_id: int) -> list[Event]:
-        fixture = self._get_fixture(match_id)
-        match = self.get_match(match_id)
-        events = fixture.get("events", []) or []
-        return [
-            _event_from_fixture(event, match)
-            for event in events
-            if isinstance(event, dict)
-        ]
+        fixture = self.get_fixture(match_id)
+        return fixture_events(fixture, self.get_match(match_id))
 
     def get_lineups(self, match_id: int) -> dict[str, Any]:
-        fixture = self._get_fixture(match_id)
-        match = self.get_match(match_id)
-        teams: dict[str, list[dict[str, Any]]] = {
-            match.home_team.name: [],
-            match.away_team.name: [],
-        }
-        for lineup in fixture.get("lineups", []) or []:
-            participant_id = _integer(lineup.get("team_id"))
-            team_name = (
-                match.home_team.name if participant_id == match.home_team.id
-                else match.away_team.name if participant_id == match.away_team.id
-                else None
-            )
-            if team_name is not None:
-                teams[team_name].append(lineup)
-        return teams
+        fixture = self.get_fixture(match_id)
+        return fixture_lineups(fixture, self.get_match(match_id))
 
     def get_shot_map(self, match_id: int) -> list[dict[str, Any]]:
-        fixture = self._get_fixture(match_id)
+        return fixture_shots(self.get_fixture(match_id))
+
+    def get_fixture_statistics(self, match_id: int) -> list[dict[str, Any]]:
         return [
-            event
-            for event in (fixture.get("events", []) or [])
-            if isinstance(event, dict)
-            and "shot" in str(_name(event.get("type")) or "").casefold()
+            row
+            for row in (self.get_fixture(match_id).get("statistics", []) or [])
+            if isinstance(row, dict)
         ]
+
+    def get_fixture_xg(self, match_id: int) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in (self.get_fixture(match_id).get("expected", []) or [])
+            if isinstance(row, dict)
+        ]
+
+    def get_fixture_ball_coordinates(
+        self, match_id: int
+    ) -> list[dict[str, Any]]:
+        fixture = self.get_fixture(match_id)
+        value = fixture.get("ballCoordinates") or fixture.get("ballcoordinates") or []
+        return [row for row in value if isinstance(row, dict)]
+
+    def get_fixture_pressure(self, match_id: int) -> list[dict[str, Any]]:
+        value = self.get_fixture(match_id).get("pressure", []) or []
+        return [row for row in value if isinstance(row, dict)]
+
+    # ---------- Live / standings / leaders ----------
+
+    def get_inplay_livescores(self) -> list[dict[str, Any]]:
+        return self.api.get_inplay_livescores()
+
+    def get_all_livescores(self) -> list[dict[str, Any]]:
+        return self.api.get_all_livescores()
+
+    def get_latest_livescores(self) -> list[dict[str, Any]]:
+        return self.api.get_latest_livescores()
+
+    def get_standings(self, season_id: int | None = None) -> list[dict[str, Any]]:
+        selected_season = season_id or self.season_id
+        if selected_season is None:
+            raise ValueError("season_id is required for standings")
+        return self.api.get_standings(selected_season)
+
+    def get_topscorers(
+        self, season_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        selected_season = season_id or self.season_id
+        if selected_season is None:
+            raise ValueError("season_id is required for top scorers")
+        return self.api.get_topscorers(selected_season)
