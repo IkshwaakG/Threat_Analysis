@@ -42,3 +42,28 @@ python -m goodgame --provider statsbomb --player-stats "Florian Wirtz" --competi
 StatsBomb Open Data only contains a limited set of historical competitions. Authenticated StatsBomb credentials can be configured separately with `SB_USERNAME` and `SB_PASSWORD`; access remains subject to your license.
 
 Run tests with `python -m unittest discover -s tests -v`. Use `python -m goodgame --help` for CLI options.
+
+
+## Sportmonks v3 module layout
+
+Sportmonks integration is split by responsibility:
+
+- `client.py`: authentication, HTTP, error handling, pagination.
+- `requests.py`: endpoint paths, filters, and full documented `include=` chains.
+- `responses.py`: raw Sportmonks response parsing and GoodGame normalization.
+- `provider.py`: GoodGame-facing orchestration.
+
+The request layer covers the football data GoodGame currently needs:
+
+- leagues and seasons
+- teams, team search, team leagues and season squads
+- players, player search and player statistics
+- fixtures by ID, IDs, season, date, range, team, search and head-to-head
+- live scores
+- standings and top scorers
+- schedules, stages and rounds
+- fixture statistics, lineups, events, xG, ball coordinates and pressure
+- expected/xG feeds by team and player
+- premium expected lineups where the subscription permits it
+
+Rich includes are intentionally retained. Sportmonks may omit unavailable fields when the active subscription, competition, or package does not provide them.
