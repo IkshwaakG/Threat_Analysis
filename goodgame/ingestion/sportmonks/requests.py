@@ -58,6 +58,13 @@ SQUAD_INCLUDES = (
 
 STANDINGS_INCLUDES = "participant;details;details.type"
 TOPSCORER_INCLUDES = "player;participant;type"
+EXPECTED_TEAM_INCLUDES = "type;fixture;participant"
+EXPECTED_PLAYER_INCLUDES = "type;fixture;player;team"
+STAGE_INCLUDES = (
+    "league;season;type;sport;rounds;currentRound;groups;fixtures;"
+    "aggregates;topscorers;statistics"
+)
+ROUND_INCLUDES = "sport;league;season;stage;fixtures;statistics"
 
 
 class SportmonksRequests:
@@ -285,6 +292,63 @@ class SportmonksRequests:
         return self.client.get_all(
             "livescores/latest",
             {"include": FIXTURE_INCLUDES, "per_page": 50},
+        )
+
+    # ---------- Schedules / stages / rounds ----------
+
+    def get_schedule_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.client.get_all(f"schedules/seasons/{season_id}")
+
+    def get_schedule_by_team(self, team_id: int) -> list[dict[str, Any]]:
+        return self.client.get_all(f"schedules/teams/{team_id}")
+
+    def get_schedule_by_season_and_team(
+        self, season_id: int, team_id: int
+    ) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            f"schedules/seasons/{season_id}/teams/{team_id}"
+        )
+
+    def get_stages_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            f"stages/seasons/{season_id}",
+            {"include": STAGE_INCLUDES, "per_page": 50},
+        )
+
+    def get_rounds_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            f"rounds/seasons/{season_id}",
+            {"include": ROUND_INCLUDES, "per_page": 50},
+        )
+
+    # ---------- Expected / xG ----------
+
+    def get_expected_by_team(self) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            "expected/fixtures",
+            {"include": EXPECTED_TEAM_INCLUDES, "per_page": 50},
+        )
+
+    def get_expected_by_player(self) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            "expected/lineups",
+            {"include": EXPECTED_PLAYER_INCLUDES, "per_page": 50},
+        )
+
+    def get_expected_lineups_by_team(
+        self, team_id: int
+    ) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            f"expected-lineups/teams/{team_id}",
+            {"include": EXPECTED_PLAYER_INCLUDES, "per_page": 50},
+        )
+
+    def get_expected_lineups_by_player(
+        self, player_id: int
+    ) -> list[dict[str, Any]]:
+        return self.client.get_all(
+            f"expected-lineups/players/{player_id}",
+            {"include": EXPECTED_PLAYER_INCLUDES, "per_page": 50},
         )
 
     # ---------- Standings / leaders ----------
