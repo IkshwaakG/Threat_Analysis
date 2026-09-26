@@ -54,6 +54,12 @@ class SportmonksProvider(MatchDataProvider):
     def search_leagues(self, name_value: str) -> list[dict[str, Any]]:
         return self.api.search_leagues(name_value)
 
+    def get_live_leagues(self) -> list[dict[str, Any]]:
+        return self.api.get_live_leagues()
+
+    def get_leagues_by_fixture_date(self, fixture_date: str) -> list[dict[str, Any]]:
+        return self.api.get_leagues_by_fixture_date(fixture_date)
+
     def list_competitions(self) -> list[dict[str, Any]]:
         rows = self.api.list_seasons()
         return [
@@ -77,6 +83,9 @@ class SportmonksProvider(MatchDataProvider):
         if selected_season is not None:
             return self.api.list_teams_by_season(selected_season)
         return self.api.list_teams()
+
+    def list_teams_by_country(self, country_id: int) -> list[dict[str, Any]]:
+        return self.api.list_teams_by_country(country_id)
 
     def get_team(self, team_id: int) -> dict[str, Any]:
         return self.api.get_team(team_id)
@@ -157,6 +166,12 @@ class SportmonksProvider(MatchDataProvider):
 
     def search_players(self, player_name: str) -> list[dict[str, Any]]:
         return self.api.search_players(player_name)
+
+    def list_players_by_country(self, country_id: int) -> list[dict[str, Any]]:
+        return self.api.list_players_by_country(country_id)
+
+    def get_latest_players(self) -> list[dict[str, Any]]:
+        return self.api.get_latest_players()
 
     def _resolve_player(self, player: str | int) -> dict[str, Any]:
         if isinstance(player, int) or str(player).strip().isdigit():
@@ -306,6 +321,9 @@ class SportmonksProvider(MatchDataProvider):
 
         return rows
 
+    def get_fixtures_by_ids(self, fixture_ids: list[int]) -> list[dict[str, Any]]:
+        return self.api.get_fixtures_by_ids(fixture_ids)
+
     def list_fixtures_by_date(self, fixture_date: str) -> list[dict[str, Any]]:
         return self.api.list_fixtures_by_date(fixture_date)
 
@@ -320,6 +338,17 @@ class SportmonksProvider(MatchDataProvider):
         return self.api.list_team_fixtures_between(
             team_id, start_date, end_date
         )
+
+    def search_fixtures(self, query: str) -> list[dict[str, Any]]:
+        return self.api.search_fixtures(query)
+
+    def get_head_to_head(
+        self, team_a_id: int, team_b_id: int
+    ) -> list[dict[str, Any]]:
+        return self.api.get_head_to_head(team_a_id, team_b_id)
+
+    def get_latest_updated_fixtures(self) -> list[dict[str, Any]]:
+        return self.api.get_latest_updated_fixtures()
 
     def get_fixture(self, match_id: int) -> dict[str, Any]:
         if match_id not in self._fixtures:
