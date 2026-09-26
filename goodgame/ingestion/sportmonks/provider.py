@@ -398,6 +398,41 @@ class SportmonksProvider(MatchDataProvider):
         value = self.get_fixture(match_id).get("pressure", []) or []
         return [row for row in value if isinstance(row, dict)]
 
+    # ---------- Schedule / structure / expected data ----------
+
+    def get_schedule_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.api.get_schedule_by_season(season_id)
+
+    def get_schedule_by_team(self, team_id: int) -> list[dict[str, Any]]:
+        return self.api.get_schedule_by_team(team_id)
+
+    def get_schedule_by_season_and_team(
+        self, season_id: int, team_id: int
+    ) -> list[dict[str, Any]]:
+        return self.api.get_schedule_by_season_and_team(season_id, team_id)
+
+    def get_stages_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.api.get_stages_by_season(season_id)
+
+    def get_rounds_by_season(self, season_id: int) -> list[dict[str, Any]]:
+        return self.api.get_rounds_by_season(season_id)
+
+    def get_expected_by_team(self) -> list[dict[str, Any]]:
+        return self.api.get_expected_by_team()
+
+    def get_expected_by_player(self) -> list[dict[str, Any]]:
+        return self.api.get_expected_by_player()
+
+    def get_expected_lineups_by_team(
+        self, team_id: int
+    ) -> list[dict[str, Any]]:
+        return self.api.get_expected_lineups_by_team(team_id)
+
+    def get_expected_lineups_by_player(
+        self, player_id: int
+    ) -> list[dict[str, Any]]:
+        return self.api.get_expected_lineups_by_player(player_id)
+
     # ---------- Live / standings / leaders ----------
 
     def get_inplay_livescores(self) -> list[dict[str, Any]]:
