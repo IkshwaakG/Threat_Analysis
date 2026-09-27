@@ -1,69 +1,247 @@
-# GoodGame football data
+# GoodGame Football Data
 
-GoodGame can use Sportmonks for current fixtures and StatsBomb for open historical event data. Sportmonks is the default provider.
+GoodGame is a football data and analytics project built around provider-independent match, team, player, and competition data.
 
-## Sportmonks
+Sportmonks Football API v3 is the default source for current football data. StatsBomb remains available for richer historical/open event data and analytics development.
 
-The token previously pasted into chat should be revoked and replaced. Set the rotated token locally in your shell; do not paste it into chat or commit it:
+## Current Architecture
+
+```text
+Sportmonks / StatsBomb
+        ↓
+provider-specific request layer
+        ↓
+response normalization
+        ↓
+GoodGame models
+        ↓
+GoodGamePipeline
+        ↓
+analytics / CLI / future API + VR clients
+```
+
+The provider abstraction allows GoodGame to switch data sources without coupling the analytics layer to one vendor.
+
+## Setup
 
 ```sh
 source .venv/bin/activate
 pip install -r requirements.txt
-export SPORTMONKS_API_TOKEN="your-rotated-sportmonks-token"
+export SPORTMONKS_API_TOKEN="your-sportmonks-token"
 python -m goodgame
 ```
 
-Choose a competition and season, then select a fixture. For a known Sportmonks fixture ID:
+Do not commit API tokens. The Sportmonks token is sent through the `Authorization` header.
 
-```sh
-python -m goodgame --provider sportmonks --match-id FIXTURE_ID
+Use `python -m goodgame --help` to see available CLI options.
+
+## Sportmonks Football API v3
+
+Sportmonks is currently the default provider.
+
+```text
+goodgame/ingestion/sportmonks/
+├── client.py
+├── requests.py
+├── responses.py
+├── provider.py
+└── PlayerStatsSampleResponse.json
 ```
 
-The integration uses Sportmonks Football API v3. It requests fixture details, participants, scores, events, lineups, statistics, and fixture expected-goal data where available. Actual includes and coverage depend on your plan; the token is sent in the `Authorization` header, not the URL. Spatial event/shot detail is not yet normalized or guaranteed by this adapter.
+- `client.py`: authentication, HTTP calls, errors, and pagination.
+- `requests.py`: Sportmonks v3 endpoint definitions, filters, and `include=` chains.
+- `responses.py`: raw response parsing and GoodGame normalization.
+- `provider.py`: GoodGame-facing orchestration.
 
-## Switch Providers
+### Supported Sportmonks resources
 
-Set `GOODGAME_PROVIDER` to change the default, or use `--provider` for one run:
+The current integration covers:
+
+- leagues, seasons, stages, rounds, and schedules
+- teams, team search, teams by season/country, and squads
+- team standings and season statistics
+- players, player search, and player season statistics
+- player statistics across all competitions in a season
+- fixtures by ID, multiple IDs, date, range, team, search, and head-to-head
+- latest-updated fixtures and live scores
+- fixture events, lineups, statistics, scores, formations, venue, weather, coaches, and referees
+- xG / expected data, lineup xG, pressure, ball coordinates, and expected lineups where available
+- top scorers
+- pre-match and post-match news
+- match facts
+- team of the week
+- team rankings
+
+Availability depends on the active Sportmonks plan and competition coverage.
+
+## Fixture retrieval
+
+Season-wide match selection uses:
+
+```text
+GET /schedules/seasons/{season_id}
+```
+
+The schedule payload can nest fixtures under stages, rounds, or groups. GoodGame recursively extracts and de-duplicates those fixtures.
+
+For a selected match, GoodGame uses:
+
+```text
+GET /fixtures/{fixture_id}
+```
+
+### Lightweight vs detailed includes
+
+Bulk listing requests intentionally stay small:
+
+```text
+SEASON_LIST_INCLUDES = league
+FIXTURE_LIST_INCLUDES = participants;scores;state
+```
+
+A single fixture request uses the detailed include chain so GoodGame can retrieve richer match context without making every list request expensive.
+
+That detailed response can include:
+
+- events and event player/type data
+- lineups and lineup details
+- statistics
+- formations
+- xG fixture and lineup data
+- scores
+- periods
+- participants
+- venue and weather
+- coaches and referees
+- pressure
+- ball coordinates
+- expected lineups
+- metadata and sidelined players
+- match news
+- odds/predictions when the account permits them
+
+## Player statistics
+
+Player requests include nested statistics data such as:
+
+```text
+statistics.details.type
+statistics.team
+statistics.season.league
+```
+
+GoodGame can narrow player statistics server-side with:
+
+```text
+playerstatisticSeasons:<season_id>
+```
+
+By default, player season statistics can aggregate across all competitions in that season. Supplying a competition ID narrows the result to one competition.
+
+Player search also includes fallback handling for abbreviated names such as `K. Schmeichel`.
+
+## Team statistics
+
+GoodGame combines standings with season team statistics:
+
+```text
+GET /standings/seasons/{season_id}
+GET /statistics/seasons/teams/{team_id}
+```
+
+This keeps league position/points and richer season statistics available independently.
+
+## Match-level data
+
+For one fixture, GoodGame can expose:
+
+- normalized match metadata
+- events
+- lineups
+- fixture statistics
+- xG
+- pressure
+- ball coordinates
+
+The analytics layer should consume normalized GoodGame data rather than provider-specific payloads directly.
+
+## Postman
+
+The repository includes:
+
+```text
+postman/
+├── GoodGame-Sportmonks.postman_collection.json
+└── GoodGame-Sportmonks.postman_environment.json
+```
+
+Import both files into Postman and set `sportmonks_token` in the environment. The collection mirrors important request paths used by the Python integration and is useful for inspecting raw Sportmonks responses.
+
+## StatsBomb
+
+StatsBomb remains available as a secondary provider for:
+
+- historical Open Data
+- detailed events
+- spatial event and shot coordinates
+- xG
+- analytics development
+- derived team/player statistics
+
+Example:
+
+```sh
+python -m goodgame \
+  --provider statsbomb \
+  --competition-id 9 \
+  --season-id 281 \
+  --match-id 3895232
+```
+
+StatsBomb Open Data contains selected competitions/seasons only. Authenticated access can use `SB_USERNAME` and `SB_PASSWORD`, subject to the account/license.
+
+## Switching providers
+
+Sportmonks is the default.
+
+```sh
+python -m goodgame --provider sportmonks
+python -m goodgame --provider statsbomb
+```
+
+Or:
 
 ```sh
 export GOODGAME_PROVIDER=statsbomb
 python -m goodgame
-python -m goodgame --provider sportmonks
 ```
 
-StatsBomb remains available for historical Open Data and its team/player season aggregations. Both providers support team season stats. Sportmonks player stats use the account-visible player search and nested season statistics; available metrics vary by subscription.
+## Tests
 
 ```sh
-python -m goodgame --provider statsbomb --competition-id 9 --season-id 281 --match-id 3895232
-python -m goodgame --provider statsbomb --team-stats "Bayer Leverkusen" --competition-id 9 --season-id 281
-python -m goodgame --provider statsbomb --player-stats "Florian Wirtz" --competition-id 9 --season-id 281
+python -m unittest discover -s tests -v
 ```
 
-StatsBomb Open Data only contains a limited set of historical competitions. Authenticated StatsBomb credentials can be configured separately with `SB_USERNAME` and `SB_PASSWORD`; access remains subject to your license.
+The Sportmonks tests cover endpoint routing, include chains, schedule fixture extraction, player search fallback, team/player statistics, and provider integration.
 
-Run tests with `python -m unittest discover -s tests -v`. Use `python -m goodgame --help` for CLI options.
+## Next direction
 
+The ingestion layer should ultimately feed persistent storage instead of repeatedly querying providers for every analytics request.
 
-## Sportmonks v3 module layout
+```text
+Sportmonks / StatsBomb
+        ↓
+raw ingestion
+        ↓
+GCP storage
+        ↓
+normalized GoodGame data
+        ↓
+analytics engine
+        ↓
+API
+        ↓
+Web / Quest
+```
 
-Sportmonks integration is split by responsibility:
-
-- `client.py`: authentication, HTTP, error handling, pagination.
-- `requests.py`: endpoint paths, filters, and full documented `include=` chains.
-- `responses.py`: raw Sportmonks response parsing and GoodGame normalization.
-- `provider.py`: GoodGame-facing orchestration.
-
-The request layer covers the football data GoodGame currently needs:
-
-- leagues and seasons
-- teams, team search, team leagues and season squads
-- players, player search and player statistics
-- fixtures by ID, IDs, season, date, range, team, search and head-to-head
-- live scores
-- standings and top scorers
-- schedules, stages and rounds
-- fixture statistics, lineups, events, xG, ball coordinates and pressure
-- expected/xG feeds by team and player
-- premium expected lineups where the subscription permits it
-
-Rich includes are intentionally retained. Sportmonks may omit unavailable fields when the active subscription, competition, or package does not provide them.
+The next major step is defining the GCP persistence model and normalized schemas, then building evidence-backed GoodGame analyzers on top.
