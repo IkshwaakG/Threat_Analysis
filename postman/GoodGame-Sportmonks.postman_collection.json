@@ -1,0 +1,188 @@
+{
+  "info": {
+    "name": "GoodGame - Sportmonks Football v3",
+    "description": "Mirrors the exact paths/includes used by goodgame/ingestion/sportmonks/requests.py. Import the sibling environment file and fill in sportmonks_token before sending requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "Authorization", "type": "string" },
+      { "key": "value", "value": "{{sportmonks_token}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Seasons & Competitions",
+      "item": [
+        {
+          "name": "GET All Seasons (list_competitions)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/seasons?include=league&per_page=50&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["seasons"],
+              "query": [
+                { "key": "include", "value": "league" },
+                { "key": "per_page", "value": "50" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Season by ID (get_season - full detail include chain)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/seasons/{{season_id}}?include=league;teams;currentStage;groups;statistics;topscorers",
+              "host": ["{{baseUrl}}"],
+              "path": ["seasons", "{{season_id}}"],
+              "query": [
+                { "key": "include", "value": "league;teams;currentStage;groups;statistics;topscorers" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fixtures",
+      "item": [
+        {
+          "name": "GET Schedules by Season ID (list_matches - CONFIRMED, no fixtures-by-season endpoint exists)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/schedules/seasons/{{season_id}}?include=participants;scores;state",
+              "host": ["{{baseUrl}}"],
+              "path": ["schedules", "seasons", "{{season_id}}"],
+              "query": [
+                { "key": "include", "value": "participants;scores;state" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Fixture by ID (get_fixture)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/fixtures/{{fixture_id}}?include=participants;scores;state;events;events.player;events.type;lineups;statistics",
+              "host": ["{{baseUrl}}"],
+              "path": ["fixtures", "{{fixture_id}}"],
+              "query": [
+                { "key": "include", "value": "participants;scores;state;events;events.player;events.type;lineups;statistics" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Fixtures by Date Range for Team (candidate replacement for season-scoped listing)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/fixtures/between/{{start_date}}/{{end_date}}/{{team_id}}?include=participants;scores;state&per_page=50&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["fixtures", "between", "{{start_date}}", "{{end_date}}", "{{team_id}}"],
+              "query": [
+                { "key": "include", "value": "participants;scores;state" },
+                { "key": "per_page", "value": "50" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Head to Head (get_head_to_head)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/fixtures/head-to-head/{{team_a_id}}/{{team_b_id}}?include=participants;scores;state&per_page=50&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["fixtures", "head-to-head", "{{team_a_id}}", "{{team_b_id}}"],
+              "query": [
+                { "key": "include", "value": "participants;scores;state" },
+                { "key": "per_page", "value": "50" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Standings & Team Stats",
+      "item": [
+        {
+          "name": "GET Standings by Season (get_standings)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/standings/seasons/{{season_id}}?include=participant;details;details.type",
+              "host": ["{{baseUrl}}"],
+              "path": ["standings", "seasons", "{{season_id}}"],
+              "query": [
+                { "key": "include", "value": "participant;details;details.type" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Team Season Statistics (get_team_season_statistics)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/statistics/seasons/teams/{{team_id}}?include=season;details;details.type&per_page=50&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["statistics", "seasons", "teams", "{{team_id}}"],
+              "query": [
+                { "key": "include", "value": "season;details;details.type" },
+                { "key": "per_page", "value": "50" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Players",
+      "item": [
+        {
+          "name": "GET Search Players by full name (search_players)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/players/search/{{player_query}}?include=nationality;detailedPosition;statistics.details.type;metadata.type;trophies.trophy;trophies.team;teams.team;statistics.team;statistics.season.league;latest.fixture.participants;latest.fixture.league;latest.fixture.scores;latest.details.type;trophies.league;trophies.season&per_page=50&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["players", "search", "{{player_query}}"],
+              "query": [
+                { "key": "include", "value": "nationality;detailedPosition;statistics.details.type;metadata.type;trophies.trophy;trophies.team;teams.team;statistics.team;statistics.season.league;latest.fixture.participants;latest.fixture.league;latest.fixture.scores;latest.details.type;trophies.league;trophies.season" },
+                { "key": "per_page", "value": "50" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Player by ID with season filter (get_player)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/players/{{player_id}}?include=nationality;detailedPosition;statistics.details.type;metadata.type;trophies.trophy;trophies.team;teams.team;statistics.team;statistics.season.league;latest.fixture.participants;latest.fixture.league;latest.fixture.scores;latest.details.type;trophies.league;trophies.season&filters=playerstatisticSeasons:{{season_id}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["players", "{{player_id}}"],
+              "query": [
+                { "key": "include", "value": "nationality;detailedPosition;statistics.details.type;metadata.type;trophies.trophy;trophies.team;teams.team;statistics.team;statistics.season.league;latest.fixture.participants;latest.fixture.league;latest.fixture.scores;latest.details.type;trophies.league;trophies.season" },
+                { "key": "filters", "value": "playerstatisticSeasons:{{season_id}}" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

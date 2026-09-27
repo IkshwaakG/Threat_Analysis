@@ -187,19 +187,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("not found in any accessible competition/season", output.getvalue())
         self.assertIn("Competitions checked: 1. Bundesliga", output.getvalue())
 
-    def test_player_stats_offer_all_leagues_and_season(self):
+    def test_player_stats_default_to_all_leagues_without_scope_prompt(self):
         provider = FakeProvider()
         output = io.StringIO()
-        choices = iter(["1", "1"])
 
         exit_code = run_cli(
             ["--player-stats", "Florian Wirtz"],
             provider=provider,
-            input_fn=lambda _: next(choices),
+            input_fn=lambda _: "1",
             output=output,
         )
 
         self.assertEqual(exit_code, 0)
+        self.assertNotIn("Select player stats scope", output.getvalue())
         self.assertIn("Season: 2023/2024 across 2 competitions", output.getvalue())
         self.assertIn("Competitions: 1. Bundesliga, Champions League", output.getvalue())
         self.assertIn("Goals: 11", output.getvalue())

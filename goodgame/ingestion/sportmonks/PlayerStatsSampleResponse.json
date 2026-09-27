@@ -1,0 +1,829 @@
+{
+  "data": {
+    "id": 169,
+    "sport_id": 1,
+    "country_id": 320,
+    "nationality_id": 320,
+    "city_id": null,
+    "position_id": 24,
+    "detailed_position_id": 24,
+    "type_id": 24,
+    "common_name": "K. Schmeichel",
+    "firstname": "Kasper",
+    "lastname": "Schmeichel",
+    "name": "Kasper Schmeichel",
+    "display_name": "Kasper Schmeichel",
+    "image_path": "https://cdn.sportmonks.com/images/soccer/players/9/169.png",
+    "height": 189,
+    "weight": 88,
+    "date_of_birth": "1986-11-05",
+    "gender": "male",
+    "nationality": {
+      "id": 320,
+      "continent_id": 1,
+      "name": "Denmark",
+      "official_name": "Kingdom of Denmark",
+      "fifa_name": "DEN",
+      "iso2": "DK",
+      "iso3": "DNK",
+      "latitude": "56.10176086425781",
+      "longitude": "9.555907249450684",
+      "borders": [
+        "DEU"
+      ],
+      "image_path": "https://cdn.sportmonks.com/images/countries/png/short/dk.png"
+    },
+    "detailedposition": {
+      "id": 24,
+      "name": "Goalkeeper",
+      "code": "goalkeeper",
+      "developer_name": "GOALKEEPER",
+      "model_type": "position",
+      "stat_group": null
+    },
+    "statistics": [
+      {
+        "id": 1417394788,
+        "player_id": 169,
+        "team_id": 53,
+        "season_id": 23690,
+        "has_values": true,
+        "position_id": 24,
+        "jersey_number": 1,
+        "details": [
+          {
+            "id": 38685526,
+            "player_statistic_id": 1417394788,
+            "type_id": 88,
+            "value": {
+              "total": 22
+            },
+            "type": {
+              "id": 88,
+              "name": "Goals Conceded",
+              "code": "goals-conceded",
+              "developer_name": "GOALS_CONCEDED",
+              "model_type": "statistic",
+              "stat_group": "defensive"
+            }
+          },
+          {
+            "id": 37634894,
+            "player_statistic_id": 1417394788,
+            "type_id": 119,
+            "value": {
+              "total": 2880
+            },
+            "type": {
+              "id": 119,
+              "name": "Minutes Played",
+              "code": "minutes-played",
+              "developer_name": "MINUTES_PLAYED",
+              "model_type": "statistic",
+              "stat_group": "NULL"
+            }
+          },
+          {
+            "id": 37634790,
+            "player_statistic_id": 1417394788,
+            "type_id": 194,
+            "value": {
+              "total": 19,
+              "home": 12,
+              "away": 7
+            },
+            "type": {
+              "id": 194,
+              "name": "Cleansheets",
+              "code": "cleansheets",
+              "developer_name": "CLEANSHEET",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 39262974,
+            "player_statistic_id": 1417394788,
+            "type_id": 214,
+            "value": {
+              "total": 25
+            },
+            "type": {
+              "id": 214,
+              "name": "Team Wins",
+              "code": "team-wins",
+              "developer_name": "WIN",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 39262960,
+            "player_statistic_id": 1417394788,
+            "type_id": 215,
+            "value": {
+              "total": 4
+            },
+            "type": {
+              "id": 215,
+              "name": "Team Draws",
+              "code": "team-draws",
+              "developer_name": "DRAW",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 44074371,
+            "player_statistic_id": 1417394788,
+            "type_id": 216,
+            "value": {
+              "total": 3
+            },
+            "type": {
+              "id": 216,
+              "name": "Team Lost",
+              "code": "team-lost",
+              "developer_name": "LOST",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 37634776,
+            "player_statistic_id": 1417394788,
+            "type_id": 321,
+            "value": {
+              "total": 32
+            },
+            "type": {
+              "id": 321,
+              "name": "Appearances",
+              "code": "appearances",
+              "developer_name": "APPEARANCES",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 37634874,
+            "player_statistic_id": 1417394788,
+            "type_id": 322,
+            "value": {
+              "total": 32
+            },
+            "type": {
+              "id": 322,
+              "name": "Lineups",
+              "code": "lineups",
+              "developer_name": "LINEUPS",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          }
+        ],
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "season": {
+          "id": 23690,
+          "sport_id": 1,
+          "league_id": 501,
+          "tie_breaker_rule_id": 171,
+          "name": "2024/2025",
+          "finished": true,
+          "pending": false,
+          "is_current": false,
+          "starting_at": "2024-08-03",
+          "ending_at": "2025-05-18",
+          "standings_recalculated_at": "2026-02-25 14:04:26",
+          "games_in_current_week": false,
+          "league": {
+            "id": 501,
+            "sport_id": 1,
+            "country_id": 1161,
+            "name": "Premiership",
+            "active": true,
+            "short_code": "SCO P",
+            "image_path": "https://cdn.sportmonks.com/images/soccer/leagues/501.png",
+            "type": "league",
+            "sub_type": "domestic",
+            "last_played_at": "2026-09-20 11:00:00",
+            "category": 2,
+            "has_jerseys": false
+          }
+        }
+      },
+      {
+        "id": 1802725824,
+        "player_id": 169,
+        "team_id": 53,
+        "season_id": 25598,
+        "has_values": true,
+        "position_id": 24,
+        "jersey_number": 1,
+        "details": [
+          {
+            "id": 48771247,
+            "player_statistic_id": 1802725824,
+            "type_id": 84,
+            "value": {
+              "total": 3,
+              "home": 0,
+              "away": 3
+            },
+            "type": {
+              "id": 84,
+              "name": "Yellowcards",
+              "code": "yellowcards",
+              "developer_name": "YELLOWCARDS",
+              "model_type": "statistic",
+              "stat_group": "overall"
+            }
+          },
+          {
+            "id": 48231418,
+            "player_statistic_id": 1802725824,
+            "type_id": 88,
+            "value": {
+              "total": 26
+            },
+            "type": {
+              "id": 88,
+              "name": "Goals Conceded",
+              "code": "goals-conceded",
+              "developer_name": "GOALS_CONCEDED",
+              "model_type": "statistic",
+              "stat_group": "defensive"
+            }
+          },
+          {
+            "id": 46908398,
+            "player_statistic_id": 1802725824,
+            "type_id": 119,
+            "value": {
+              "total": 2340
+            },
+            "type": {
+              "id": 119,
+              "name": "Minutes Played",
+              "code": "minutes-played",
+              "developer_name": "MINUTES_PLAYED",
+              "model_type": "statistic",
+              "stat_group": "NULL"
+            }
+          },
+          {
+            "id": 46908345,
+            "player_statistic_id": 1802725824,
+            "type_id": 194,
+            "value": {
+              "total": 12,
+              "home": 8,
+              "away": 4
+            },
+            "type": {
+              "id": 194,
+              "name": "Cleansheets",
+              "code": "cleansheets",
+              "developer_name": "CLEANSHEET",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 46908446,
+            "player_statistic_id": 1802725824,
+            "type_id": 214,
+            "value": {
+              "total": 16
+            },
+            "type": {
+              "id": 214,
+              "name": "Team Wins",
+              "code": "team-wins",
+              "developer_name": "WIN",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 47989949,
+            "player_statistic_id": 1802725824,
+            "type_id": 215,
+            "value": {
+              "total": 3
+            },
+            "type": {
+              "id": 215,
+              "name": "Team Draws",
+              "code": "team-draws",
+              "developer_name": "DRAW",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 48771237,
+            "player_statistic_id": 1802725824,
+            "type_id": 216,
+            "value": {
+              "total": 7
+            },
+            "type": {
+              "id": 216,
+              "name": "Team Lost",
+              "code": "team-lost",
+              "developer_name": "LOST",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 46908335,
+            "player_statistic_id": 1802725824,
+            "type_id": 321,
+            "value": {
+              "total": 26
+            },
+            "type": {
+              "id": 321,
+              "name": "Appearances",
+              "code": "appearances",
+              "developer_name": "APPEARANCES",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          },
+          {
+            "id": 46908386,
+            "player_statistic_id": 1802725824,
+            "type_id": 322,
+            "value": {
+              "total": 26
+            },
+            "type": {
+              "id": 322,
+              "name": "Lineups",
+              "code": "lineups",
+              "developer_name": "LINEUPS",
+              "model_type": "statistic",
+              "stat_group": null
+            }
+          }
+        ],
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "season": {
+          "id": 25598,
+          "sport_id": 1,
+          "league_id": 501,
+          "tie_breaker_rule_id": 171,
+          "name": "2025/2026",
+          "finished": true,
+          "pending": false,
+          "is_current": false,
+          "starting_at": "2025-08-02",
+          "ending_at": "2026-05-17",
+          "standings_recalculated_at": "2026-06-09 07:14:23",
+          "games_in_current_week": false,
+          "league": {
+            "id": 501,
+            "sport_id": 1,
+            "country_id": 1161,
+            "name": "Premiership",
+            "active": true,
+            "short_code": "SCO P",
+            "image_path": "https://cdn.sportmonks.com/images/soccer/leagues/501.png",
+            "type": "league",
+            "sub_type": "domestic",
+            "last_played_at": "2026-09-20 11:00:00",
+            "category": 2,
+            "has_jerseys": false
+          }
+        }
+      }
+    ],
+    "metadata": [
+      {
+        "id": 145794,
+        "metadatable_id": 169,
+        "type_id": 229,
+        "value_type": "string",
+        "values": "right",
+        "type": {
+          "id": 229,
+          "name": "Preferred Foot",
+          "code": "preferred-foot",
+          "developer_name": "PREFERRED_FOOT",
+          "model_type": "metadata",
+          "stat_group": null
+        }
+      }
+    ],
+    "trophies": [
+      {
+        "id": 80123,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 8,
+        "season_id": 10,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 80593,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 9,
+        "season_id": 23,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 730551,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 23,
+        "season_id": 720,
+        "trophy_id": 2,
+        "trophy": {
+          "id": 2,
+          "sport_id": 1,
+          "position": 2,
+          "name": "Runner-up"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 15314,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 1366,
+        "season_id": 16377,
+        "trophy_id": 2,
+        "trophy": {
+          "id": 2,
+          "sport_id": 1,
+          "position": 2,
+          "name": "Runner-up"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 19732,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 24,
+        "season_id": 17411,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 24954,
+        "participant_id": 169,
+        "team_id": 42,
+        "league_id": 23,
+        "season_id": 18344,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 42,
+          "sport_id": 1,
+          "country_id": 462,
+          "venue_id": 117,
+          "gender": "male",
+          "name": "Leicester City",
+          "short_code": "LEI",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/10/42.png",
+          "founded": 1884,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-22 18:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 12272185,
+        "participant_id": 169,
+        "team_id": 53,
+        "league_id": 510,
+        "season_id": 23565,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 12309162,
+        "participant_id": 169,
+        "team_id": 53,
+        "league_id": 501,
+        "season_id": 23690,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "league": {
+          "id": 501,
+          "sport_id": 1,
+          "country_id": 1161,
+          "name": "Premiership",
+          "active": true,
+          "short_code": "SCO P",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/leagues/501.png",
+          "type": "league",
+          "sub_type": "domestic",
+          "last_played_at": "2026-09-20 11:00:00",
+          "category": 2,
+          "has_jerseys": false
+        },
+        "season": {
+          "id": 23690,
+          "sport_id": 1,
+          "league_id": 501,
+          "tie_breaker_rule_id": 171,
+          "name": "2024/2025",
+          "finished": true,
+          "pending": false,
+          "is_current": false,
+          "starting_at": "2024-08-03",
+          "ending_at": "2025-05-18",
+          "standings_recalculated_at": "2026-02-25 14:04:26",
+          "games_in_current_week": false
+        }
+      },
+      {
+        "id": 12327234,
+        "participant_id": 169,
+        "team_id": 53,
+        "league_id": 507,
+        "season_id": 24007,
+        "trophy_id": 2,
+        "trophy": {
+          "id": 2,
+          "sport_id": 1,
+          "position": 2,
+          "name": "Runner-up"
+        },
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "league": null,
+        "season": null
+      },
+      {
+        "id": 16340658,
+        "participant_id": 169,
+        "team_id": 53,
+        "league_id": 501,
+        "season_id": 25598,
+        "trophy_id": 1,
+        "trophy": {
+          "id": 1,
+          "sport_id": 1,
+          "position": 1,
+          "name": "Winner"
+        },
+        "team": {
+          "id": 53,
+          "sport_id": 1,
+          "country_id": 1161,
+          "venue_id": 8909,
+          "gender": "male",
+          "name": "Celtic",
+          "short_code": "CEL",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/teams/21/53.png",
+          "founded": 1888,
+          "type": "domestic",
+          "placeholder": false,
+          "last_played_at": "2026-09-20 11:00:00"
+        },
+        "league": {
+          "id": 501,
+          "sport_id": 1,
+          "country_id": 1161,
+          "name": "Premiership",
+          "active": true,
+          "short_code": "SCO P",
+          "image_path": "https://cdn.sportmonks.com/images/soccer/leagues/501.png",
+          "type": "league",
+          "sub_type": "domestic",
+          "last_played_at": "2026-09-20 11:00:00",
+          "category": 2,
+          "has_jerseys": false
+        },
+        "season": {
+          "id": 25598,
+          "sport_id": 1,
+          "league_id": 501,
+          "tie_breaker_rule_id": 171,
+          "name": "2025/2026",
+          "finished": true,
+          "pending": false,
+          "is_current": false,
+          "starting_at": "2025-08-02",
+          "ending_at": "2026-05-17",
+          "standings_recalculated_at": "2026-06-09 07:14:23",
+          "games_in_current_week": false
+        }
+      }
+    ],
+    "teams": [],
+    "latest": []
+  },
+  "subscription": [
+    {
+      "meta": [],
+      "plans": [
+        {
+          "plan": "Cricket Free Plan",
+          "sport": "Cricket",
+          "category": "Standard"
+        },
+        {
+          "plan": "Football Free Plan",
+          "sport": "Football",
+          "category": "Standard"
+        }
+      ],
+      "add_ons": [],
+      "widgets": []
+    }
+  ],
+  "rate_limit": {
+    "resets_in_seconds": 3451,
+    "remaining": 176,
+    "requested_entity": "Player"
+  },
+  "timezone": "UTC"
+}

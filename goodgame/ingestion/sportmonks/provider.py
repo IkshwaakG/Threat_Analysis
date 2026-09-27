@@ -7,12 +7,14 @@ This provider coordinates the two layers and exposes GoodGame-friendly methods.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from goodgame.ingestion.provider import MatchDataProvider
 from goodgame.ingestion.sportmonks.client import SportmonksClient
 from goodgame.ingestion.sportmonks.requests import SportmonksRequests
 from goodgame.ingestion.sportmonks.responses import (
+    extract_fixtures_from_schedule,
     fixture_events,
     fixture_lineups,
     fixture_shots,
@@ -173,12 +175,28 @@ class SportmonksProvider(MatchDataProvider):
     def get_latest_players(self) -> list[dict[str, Any]]:
         return self.api.get_latest_players()
 
-    def _resolve_player(self, player: str | int) -> dict[str, Any]:
-        if isinstance(player, int) or str(player).strip().isdigit():
-            return self.api.get_player(int(player))
+    @staticmethod
+    def _abbreviated_name_matches(item: dict[str, Any], query: str) -> bool:
+        """Match e.g. 'K. Schmeichel' against firstname/lastname base fields.
 
-        candidates = self.api.search_players(str(player))
-        requested = " ".join(str(player).casefold().split())
+        Sportmonks' free-text search does not index common_name, so a query
+        built from an initial + surname often returns zero results even
+        though the player exists. This is only used as a local filter once a
+        surname-only search has already narrowed the candidate list.
+        """
+        tokens = [part for part in re.split(r"[.\s]+", query.strip()) if part]
+        if len(tokens) < 2:
+            return False
+        given, surname = tokens[0], tokens[-1]
+        lastname = str(item.get("lastname", "")).casefold()
+        firstname = str(item.get("firstname", "")).casefold()
+        if lastname != surname.casefold():
+            return False
+        return firstname.startswith(given[0].casefold())
+
+    def _search_player_candidates(self, query: str) -> list[dict[str, Any]]:
+        candidates = self.api.search_players(query)
+        requested = " ".join(query.casefold().split())
         exact = [
             item
             for item in candidates
@@ -187,7 +205,31 @@ class SportmonksProvider(MatchDataProvider):
                 for field in ("name", "display_name", "common_name")
             )
         ]
-        candidates = exact or candidates
+        if exact:
+            return exact
+        if candidates:
+            return candidates
+
+        # Full-string search found nothing; retry with just the surname and
+        # match locally by first-initial, covering abbreviated queries like
+        # "K. Schmeichel" that Sportmonks' search endpoint can't resolve.
+        tokens = [part for part in re.split(r"[.\s]+", query.strip()) if part]
+        if len(tokens) < 2:
+            return []
+        surname_candidates = self.api.search_players(tokens[-1])
+        return [
+            item
+            for item in surname_candidates
+            if self._abbreviated_name_matches(item, query)
+        ]
+
+    def _resolve_player(
+        self, player: str | int, season_ids: list[int] | None = None
+    ) -> dict[str, Any]:
+        if isinstance(player, int) or str(player).strip().isdigit():
+            return self.api.get_player(int(player), season_ids=season_ids)
+
+        candidates = self._search_player_candidates(str(player))
 
         if not candidates:
             raise LookupError(
@@ -206,7 +248,7 @@ class SportmonksProvider(MatchDataProvider):
             raise LookupError(
                 f"Sportmonks player search returned no player ID for {player}"
             )
-        return self.api.get_player(player_id)
+        return self.api.get_player(player_id, season_ids=season_ids)
 
     def get_player_statistics(
         self,
@@ -215,7 +257,10 @@ class SportmonksProvider(MatchDataProvider):
         competition_id: int | None = None,
         season_id: int | None = None,
     ) -> dict[str, Any]:
-        record = self._resolve_player(player)
+        selected_competition = competition_id or self.competition_id
+        selected_season = season_id or self.season_id
+        season_ids = [selected_season] if selected_season is not None else None
+        record = self._resolve_player(player, season_ids=season_ids)
         statistics = [
             row
             for row in (record.get("statistics", []) or [])
@@ -225,8 +270,8 @@ class SportmonksProvider(MatchDataProvider):
             record,
             statistics,
             team=team,
-            competition_id=competition_id,
-            season_id=season_id,
+            competition_id=selected_competition,
+            season_id=selected_season,
         )
 
     def get_player_statistics_all_leagues(
@@ -235,6 +280,10 @@ class SportmonksProvider(MatchDataProvider):
         player: str | int,
         team: str | None = None,
     ) -> dict[str, Any]:
+        # Fetch the player's full statistics history: mapping a season name to
+        # every matching season ID across leagues is error-prone (a league
+        # missing from list_competitions() would silently drop its stats), so
+        # filtering by season/competition happens client-side below instead.
         record = self._resolve_player(player)
         statistics = [
             row
@@ -295,7 +344,10 @@ class SportmonksProvider(MatchDataProvider):
     def list_matches(
         self, competition_id: int, season_id: int
     ) -> list[dict[str, Any]]:
-        fixtures = self.api.list_fixtures_by_season(season_id)
+        # Sportmonks v3 has no fixtures-by-season endpoint; fixtures come
+        # nested inside the season's schedule (stages -> rounds/groups).
+        schedule = self.api.get_schedule_by_season(season_id)
+        fixtures = extract_fixtures_from_schedule(schedule)
         rows: list[dict[str, Any]] = []
 
         for fixture in fixtures:
@@ -306,7 +358,6 @@ class SportmonksProvider(MatchDataProvider):
             except (KeyError, TypeError, ValueError):
                 continue
 
-            self._fixtures[match.id] = fixture
             self._matches[match.id] = match
             rows.append(
                 {

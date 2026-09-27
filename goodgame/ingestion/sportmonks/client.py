@@ -2,6 +2,7 @@
 
 import os
 from typing import Any, Mapping
+from urllib.parse import urlencode
 
 import requests
 
@@ -33,10 +34,14 @@ class SportmonksClient:
         params: Mapping[str, str | int] | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
+        # Sportmonks' include chains use literal ';' separators; requests' dict
+        # encoder percent-encodes them to '%3B', which some Sportmonks routes
+        # fail to parse. Pre-encode the query string, keeping ';' literal.
+        query = urlencode(params, safe=";") if params else None
         try:
             response = self.session.get(
                 url,
-                params=params,
+                params=query,
                 headers={"Authorization": self.token, "Accept": "application/json"},
                 timeout=self.timeout,
             )

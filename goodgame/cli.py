@@ -191,21 +191,6 @@ def _choose_competition_season(
     return season_options[selection][0] if selection is not None else None
 
 
-def _choose_player_scope(
-    input_fn: Callable[[str], str], output: TextIO
-) -> bool | None:
-    selection = _choose(
-        [
-            "All competitions available in a season",
-            "One competition and season",
-        ],
-        input_fn,
-        output,
-        "Select player stats scope: ",
-    )
-    return None if selection is None else selection == 0
-
-
 def _choose_all_league_season(
     provider: Any,
     season_id: int | None,
@@ -388,11 +373,9 @@ def run_cli(
                     "--provider statsbomb or sportmonks only.\n"
                 )
                 return 1
-            all_leagues = args.all_leagues
-            if not all_leagues and args.competition_id is None:
-                all_leagues = _choose_player_scope(input_fn, output)
-                if all_leagues is None:
-                    return 1
+            # Default to searching every competition in the season unless the
+            # caller narrows to one via --competition-id.
+            all_leagues = args.all_leagues or args.competition_id is None
 
             if all_leagues:
                 if not callable(getattr(provider, "get_player_statistics_all_leagues", None)):

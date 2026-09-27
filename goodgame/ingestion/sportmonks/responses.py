@@ -38,6 +38,33 @@ def slug(value: Any) -> str:
     )
 
 
+def extract_fixtures_from_schedule(schedule: Any) -> list[dict[str, Any]]:
+    """Flatten a schedules-by-season payload into a flat, de-duplicated fixture list.
+
+    Sportmonks v3 has no fixtures-by-season endpoint; schedules-by-season
+    nests fixtures under stages -> rounds/groups instead, at varying depth
+    depending on competition format, so this walks the whole tree.
+    """
+    fixtures: dict[int, dict[str, Any]] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            raw_fixtures = node.get("fixtures")
+            if isinstance(raw_fixtures, list):
+                for fixture in raw_fixtures:
+                    if isinstance(fixture, dict) and fixture.get("id") is not None:
+                        fixtures[fixture["id"]] = fixture
+            for value in node.values():
+                if isinstance(value, (list, dict)):
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(schedule)
+    return list(fixtures.values())
+
+
 def season_key(value: Any) -> str:
     parts = re.findall(r"\d{2,4}", str(value))
     if not parts:

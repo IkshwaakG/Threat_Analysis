@@ -8,7 +8,9 @@ from goodgame.ingestion.sportmonks.client import SportmonksClient
 from goodgame.ingestion.sportmonks.provider import SportmonksProvider
 from goodgame.ingestion.sportmonks.requests import (
     FIXTURE_INCLUDES,
+    FIXTURE_LIST_INCLUDES,
     PLAYER_INCLUDES,
+    SEASON_LIST_INCLUDES,
     STANDINGS_INCLUDES,
 )
 from goodgame.cli import run_cli
@@ -55,6 +57,33 @@ class FakeSportmonksClient:
             self.assert_include(params, FIXTURE_INCLUDES)
             return {"data": self.fixture(include_detail=True)}
 
+        if path == "players/169":
+            self.assert_include(params, PLAYER_INCLUDES)
+            return {
+                "data": {
+                    "id": 169,
+                    "name": "Kasper Schmeichel",
+                    "common_name": "K. Schmeichel",
+                    "firstname": "Kasper",
+                    "lastname": "Schmeichel",
+                    "statistics": [
+                        {
+                            "team_id": 53,
+                            "season_id": 23690,
+                            "team": {"id": 53, "name": "Celtic"},
+                            "season": {
+                                "id": 23690,
+                                "name": "2024/2025",
+                                "league": {"id": 501, "name": "Premiership"},
+                            },
+                            "details": [
+                                {"type": {"name": "Appearances"}, "value": {"total": 32}},
+                            ],
+                        }
+                    ],
+                }
+            }
+
         if path in {"players/100", "players/1878"}:
             self.assert_include(params, PLAYER_INCLUDES)
             player_id = int(path.split("/")[-1])
@@ -100,6 +129,7 @@ class FakeSportmonksClient:
         self.calls.append((path, params))
 
         if path == "seasons":
+            self.assert_include(params, SEASON_LIST_INCLUDES)
             return [
                 {
                     "id": 318,
@@ -109,13 +139,46 @@ class FakeSportmonksClient:
                 }
             ]
 
-        if path == "fixtures/seasons/318":
-            self.assert_include(params, FIXTURE_INCLUDES)
-            return [self.fixture(include_detail=False)]
+        if path == "schedules/seasons/318":
+            self.assert_include(params, FIXTURE_LIST_INCLUDES)
+            return [
+                {
+                    "id": 1,
+                    "name": "Regular Season",
+                    "rounds": [
+                        {
+                            "id": 11,
+                            "name": "1",
+                            "fixtures": [self.fixture(include_detail=False)],
+                        }
+                    ],
+                }
+            ]
 
         if path == "players/search/Bruno%20Fernandes":
             self.assert_include(params, PLAYER_INCLUDES)
             return [{"id": 100, "name": "Bruno Fernandes"}]
+
+        if path == "players/search/K.%20Schmeichel":
+            # Sportmonks' search does not index common_name, so an abbreviated
+            # query like this legitimately returns nothing.
+            return []
+
+        if path == "players/search/Schmeichel":
+            return [
+                {
+                    "id": 169,
+                    "name": "Kasper Schmeichel",
+                    "firstname": "Kasper",
+                    "lastname": "Schmeichel",
+                },
+                {
+                    "id": 999,
+                    "name": "Someone Elseschmeichel",
+                    "firstname": "Someone",
+                    "lastname": "Elseschmeichel",
+                },
+            ]
 
         if path == "statistics/seasons/teams/14":
             self.assert_include(params, "season;details;details.type")
@@ -276,6 +339,17 @@ class SportmonksProviderTests(unittest.TestCase):
         self.assertEqual(stats["season_name"], "2024/2025")
         self.assertEqual(stats["appearances"], 22)
         self.assertEqual(stats["goals"], 7)
+
+    def test_abbreviated_player_name_falls_back_to_surname_search(self):
+        provider = SportmonksProvider(client=FakeSportmonksClient())
+
+        stats = provider.get_player_statistics(
+            "K. Schmeichel", competition_id=501, season_id=23690
+        )
+
+        self.assertEqual(stats["player_id"], 169)
+        self.assertEqual(stats["player_name"], "Kasper Schmeichel")
+        self.assertEqual(stats["appearances"], 32)
 
     def test_player_id_uses_full_documented_detail_include(self):
         client = FakeSportmonksClient()
