@@ -13,6 +13,7 @@ from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 
 from goodgame.ingestion.bigquery.provider import BigQueryProvider
+from goodgame.serving.bigquery_repository import BigQueryServingRepository
 from goodgame.pipeline import GoodGamePipeline
 
 
@@ -38,9 +39,13 @@ app.add_middleware(
 
 
 def _provider() -> BigQueryProvider:
-    # Serving is intentionally DB-only. Sportmonks belongs to the ETL/ingestion
-    # path and must never be called by frontend-facing API requests.
+    # Compatibility path for older endpoints.
     return BigQueryProvider()
+
+
+def _serving_repository() -> BigQueryServingRepository:
+    # Primary frontend read path: one BigQuery job per screen.
+    return BigQueryServingRepository()
 
 
 def _integer(value: Any) -> int | None:
@@ -673,6 +678,47 @@ def season_players(
         if not callable(getattr(provider, "list_players_for_season", None)):
             raise ValueError("Configured provider does not support player listing")
         return provider.list_players_for_season(
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+@app.get("/api/games/{fixture_id}")
+def game_view(fixture_id: int) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_game_view(fixture_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/teams/{team_id}")
+def team_view(
+    team_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_team_view(
+            team_id=team_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/players/{player_id}")
+def player_view(
+    player_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_player_view(
+            player_id=player_id,
             season_id=season_id,
             league_id=competition_id,
         )
