@@ -211,20 +211,22 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
                     default=max(1, len(same_line)),
                 )
                 if len(line_numbers) == 1:
-                    x = 50.0
+                    x = 28.0
                 else:
-                    x = 7.5 + (line_index[line] / (len(line_numbers) - 1)) * 65.0
+                    # Starting formations must stay inside the team's own half.
+                    # Home is rendered on the left, away is mirrored to the right.
+                    x = 6.0 + (line_index[line] / (len(line_numbers) - 1)) * 40.0
                 y = (slot / (max_slot + 1)) * 100.0
             else:
                 role = _visual_role(row.get("position_id")).casefold()
                 if "goal" in role:
-                    x = 7.5
+                    x = 7.0
                 elif "def" in role:
-                    x = 24.0
+                    x = 19.0
                 elif "mid" in role:
-                    x = 45.0
+                    x = 32.0
                 else:
-                    x = 68.0
+                    x = 44.0
                 y = ((index + 1) / (len(side_rows) + 1)) * 100.0
 
             if side == "away":
@@ -262,6 +264,186 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
             )
 
     return result
+
+
+def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
+    """Merge provider events + timeline into one selectable spatial event list."""
+    visual_players = _visual_players(game)
+    players_by_id = {
+        int(player["player_id"]): player
+        for player in visual_players
+        if player.get("player_id") is not None
+    }
+
+    def category(item: dict[str, Any]) -> str:
+        value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
+        if "substitution" in value:
+            return "substitution"
+        if "goal" in value:
+            return "goal"
+        if "yellow" in value or "red" in value or "card" in value:
+            return "card"
+        if "corner" in value:
+            return "corner"
+        if "shot on target" in value:
+            return "shot_on_target"
+        if "shot off target" in value:
+            return "shot_off_target"
+        if "shot" in value:
+            return "shot"
+        if "offside" in value:
+            return "offside"
+        if "penalty" in value:
+            return "penalty"
+        return re.sub(r"[^a-z0-9]+", "_", str(item.get("type") or "event").casefold()).strip("_") or "event"
+
+    def side(item: dict[str, Any]) -> str | None:
+        if item.get("is_home") is True:
+            return "home"
+        if item.get("is_home") is False:
+            return "away"
+        return None
+
+    def attacking_x(team_side: str | None, home_x: float, away_x: float) -> float:
+        return away_x if team_side == "away" else home_x
+
+    def player_for(item: dict[str, Any]) -> dict[str, Any] | None:
+        player_id = item.get("player_id")
+        if player_id is not None:
+            try:
+                current = players_by_id.get(int(player_id))
+                if current is not None:
+                    return current
+            except (TypeError, ValueError):
+                pass
+        player_name = str(item.get("player") or "").strip().casefold()
+        if player_name:
+            for current in visual_players:
+                if str(current.get("name") or "").strip().casefold() == player_name:
+                    return current
+        return None
+
+    def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
+        team_side = side(item)
+        player = player_for(item)
+        player_anchor = (
+            {"x": float(player["x"]), "y": float(player["y"])}
+            if player is not None else None
+        )
+        stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
+        source = "stored" if stored_path else "inferred"
+
+        if stored_path:
+            start = stored_path.get("start")
+            return {
+                "kind": kind,
+                "source": source,
+                "anchor": start if isinstance(start, dict) else player_anchor,
+                "ball_path": stored_path,
+                "highlight_player_id": item.get("player_id") if kind == "goal" else None,
+            }
+
+        if kind == "goal":
+            # Until provider ball coordinates are available, keep this deliberately
+            # simple and explicit: penalty spot -> attacking goal.
+            start = {"x": attacking_x(team_side, 88.0, 12.0), "y": 50.0}
+            end = {"x": attacking_x(team_side, 99.2, 0.8), "y": 50.0}
+            return {
+                "kind": kind,
+                "source": "inferred",
+                "anchor": player_anchor or start,
+                "ball_path": {"start": start, "end": end},
+                "highlight_player_id": item.get("player_id"),
+            }
+
+        if kind == "corner":
+            corner_y = 2.0 if (player_anchor or {"y": 50.0})["y"] < 50.0 else 98.0
+            start = {"x": attacking_x(team_side, 99.0, 1.0), "y": corner_y}
+            end = {"x": attacking_x(team_side, 87.0, 13.0), "y": 50.0}
+            return {
+                "kind": kind,
+                "source": "inferred",
+                "anchor": start,
+                "ball_path": {"start": start, "end": end},
+                "highlight_player_id": None,
+            }
+
+        if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            start_x = 88.0 if kind == "penalty" else 78.0
+            start = {
+                "x": attacking_x(team_side, start_x, 100.0 - start_x),
+                "y": player_anchor["y"] if player_anchor else 50.0,
+            }
+            if kind == "shot_off_target":
+                end_y = 8.0 if start["y"] < 50.0 else 92.0
+            else:
+                end_y = 50.0
+            end = {"x": attacking_x(team_side, 99.2, 0.8), "y": end_y}
+            return {
+                "kind": kind,
+                "source": "inferred",
+                "anchor": start,
+                "ball_path": {"start": start, "end": end},
+                "highlight_player_id": None,
+            }
+
+        if kind == "offside":
+            anchor = {
+                "x": attacking_x(team_side, 82.0, 18.0),
+                "y": player_anchor["y"] if player_anchor else 50.0,
+            }
+        elif player_anchor:
+            anchor = player_anchor
+        else:
+            anchor = {"x": 34.0 if team_side != "away" else 66.0, "y": 50.0}
+
+        return {
+            "kind": kind,
+            "source": "inferred",
+            "anchor": anchor,
+            "ball_path": None,
+            "highlight_player_id": None,
+        }
+
+    # Prefer richer fixture events when timeline contains the same occurrence.
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for source_kind in ("events", "timeline"):
+        for raw in game.get(source_kind, []) or []:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            kind = category(item)
+            if kind == "substitution":
+                continue
+
+            dedupe_key = (
+                item.get("minute"),
+                item.get("extra_minute"),
+                kind,
+                item.get("team_id"),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            item["source_kind"] = "event" if source_kind == "events" else "timeline"
+            item["spatial"] = spatial(item, kind)
+            if not item.get("player") and item.get("player_id") is not None:
+                current = player_for(item)
+                if current is not None:
+                    item["player"] = current.get("name")
+            merged.append(item)
+
+    merged.sort(
+        key=lambda item: (
+            item.get("minute") if item.get("minute") is not None else 999,
+            item.get("extra_minute") if item.get("extra_minute") is not None else 0,
+            item.get("sort_order") if item.get("sort_order") is not None else 999,
+            0 if item.get("source_kind") == "event" else 1,
+        )
+    )
+    return merged
 
 
 def _spatial_flow(game: dict[str, Any]) -> list[dict[str, Any]]:
@@ -492,6 +674,7 @@ def game_view(fixture_id: int) -> dict[str, Any]:
     _positive(fixture_id, "fixture_id")
     try:
         game = _repository().get_game_view(fixture_id)
+        game["selectable_events"] = _selectable_events(game)
         game["spatial_flow"] = _spatial_flow(game)
         return game
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
