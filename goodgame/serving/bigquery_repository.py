@@ -1644,6 +1644,17 @@ class BigQueryServingRepository:
                 AND l.season_id = @season_id
                 AND (@league_id IS NULL OR l.league_id = @league_id)
             ),
+            player_summary AS (
+              SELECT
+                COUNT(DISTINCT l.fixture_id) AS appearances,
+                COUNT(DISTINCT IF(l.lineup_type_id = 11, l.fixture_id, NULL)) AS starts
+              FROM {self._table("fixture_lineups")} l
+              JOIN {self._table("fixtures")} f USING (fixture_id)
+              WHERE l.player_id = @player_id
+                AND l.season_id = @season_id
+                AND (@league_id IS NULL OR l.league_id = @league_id)
+                AND f.starting_at <= CURRENT_TIMESTAMP()
+            ),
             recent_fixture_ids AS (
               SELECT f.fixture_id
               FROM {self._table("fixtures")} f
@@ -1713,6 +1724,16 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'summary' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                appearances,
+                starts
+              )) AS payload
+            FROM player_summary
+
+            UNION ALL
+
+            SELECT
               'team' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 team_id AS id,
@@ -1750,6 +1771,7 @@ class BigQueryServingRepository:
         stats: list[dict[str, Any]] = []
         teams: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
+        summary: dict[str, Any] = {}
 
         for row in rows:
             kind = row["row_kind"]
@@ -1765,33 +1787,45 @@ class BigQueryServingRepository:
             elif kind == "fixture":
                 data["profile_url"] = f"/games/{data['id']}"
                 fixtures.append(data)
+            elif kind == "summary":
+                summary = data
 
         if player is None:
             raise LookupError(f"Player {player_id} not found for season {season_id}")
 
+        season_stats = _rank_stats(
+            _profile_stat_rows(
+                stats,
+                matches_played=int(summary.get("appearances") or 0),
+            ),
+            (
+                "rating",
+                "minute",
+                "goal",
+                "assist",
+                "expected goal",
+                "xg",
+                "shot",
+                "pass",
+                "key pass",
+                "tackle",
+                "interception",
+                "duel",
+                "save",
+                "clean sheet",
+            ),
+            40,
+        )
+
+        derived_stats = [
+            {"name": "Appearances", "developer_name": "appearances", "value": summary.get("appearances")},
+            {"name": "Starts", "developer_name": "starts", "value": summary.get("starts")},
+        ]
+
         return {
             "player": player,
-            "stats": _rank_stats(
-                _profile_stat_rows(stats),
-                (
-                    "rating",
-                    "appearance",
-                    "minute",
-                    "goal",
-                    "assist",
-                    "expected goal",
-                    "xg",
-                    "shot",
-                    "pass",
-                    "key pass",
-                    "tackle",
-                    "interception",
-                    "duel",
-                    "save",
-                    "clean sheet",
-                ),
-                40,
-            ),
+            "summary": summary,
+            "stats": derived_stats + season_stats,
             "teams": teams,
             "recent_fixtures": fixtures,
             "source": "bigquery",
