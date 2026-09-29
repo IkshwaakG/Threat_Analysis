@@ -12,8 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 
-from goodgame.ingestion.factory import create_provider
-from goodgame.ingestion.sportmonks.client import SportmonksError
+from goodgame.ingestion.bigquery.provider import BigQueryProvider
 from goodgame.pipeline import GoodGamePipeline
 
 
@@ -38,10 +37,10 @@ app.add_middleware(
 )
 
 
-def _provider():
-    # The web/API read path comes from normalized GCP data. Sportmonks is an
-    # ingestion source and should not be called by frontend requests.
-    return create_provider("bigquery")
+def _provider() -> BigQueryProvider:
+    # Serving is intentionally DB-only. Sportmonks belongs to the ETL/ingestion
+    # path and must never be called by frontend-facing API requests.
+    return BigQueryProvider()
 
 
 def _integer(value: Any) -> int | None:
@@ -368,7 +367,7 @@ def health() -> dict[str, str]:
 def competitions() -> list[dict[str, Any]]:
     try:
         rows = _provider().list_competitions()
-    except (ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     unique: dict[int, dict[str, Any]] = {}
@@ -389,7 +388,7 @@ def competitions() -> list[dict[str, Any]]:
 def seasons(competition_id: int) -> list[dict[str, Any]]:
     try:
         rows = _provider().list_competitions()
-    except (ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     unique: dict[int, dict[str, Any]] = {}
@@ -415,7 +414,7 @@ def seasons(competition_id: int) -> list[dict[str, Any]]:
 def matches(competition_id: int, season_id: int) -> list[dict[str, Any]]:
     try:
         rows = _provider().list_matches(competition_id, season_id)
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     return [
@@ -439,7 +438,7 @@ def match_visualization(match_id: int) -> dict[str, Any]:
     try:
         fixture = provider.get_fixture(match_id)
         match = provider.get_match(match_id)
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     colors = _team_colors(fixture)
@@ -569,7 +568,7 @@ def match_analysis(match_id: int) -> dict[str, Any]:
             if callable(getattr(provider, "get_fixture_xg", None))
             else []
         )
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     return {
