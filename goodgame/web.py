@@ -297,16 +297,6 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "penalty"
         return re.sub(r"[^a-z0-9]+", "_", str(item.get("type") or "event").casefold()).strip("_") or "event"
 
-    def side(item: dict[str, Any]) -> str | None:
-        if item.get("is_home") is True:
-            return "home"
-        if item.get("is_home") is False:
-            return "away"
-        return None
-
-    def attacking_x(team_side: str | None, home_x: float, away_x: float) -> float:
-        return away_x if team_side == "away" else home_x
-
     def player_for(item: dict[str, Any]) -> dict[str, Any] | None:
         player_id = item.get("player_id")
         if player_id is not None:
@@ -322,6 +312,44 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 if str(current.get("name") or "").strip().casefold() == player_name:
                     return current
         return None
+
+    home_team_id = game.get("home_team", {}).get("id")
+    away_team_id = game.get("away_team", {}).get("id")
+
+    def side(item: dict[str, Any]) -> str | None:
+        # Timeline rows do not always carry is_home. Resolve ownership from the
+        # actual participant/team id first so every attacking event is mirrored
+        # into the opponent's half correctly.
+        team_id = item.get("team_id")
+        if team_id is not None:
+            try:
+                normalized_team_id = int(team_id)
+                if home_team_id is not None and normalized_team_id == int(home_team_id):
+                    return "home"
+                if away_team_id is not None and normalized_team_id == int(away_team_id):
+                    return "away"
+            except (TypeError, ValueError):
+                pass
+
+        if item.get("is_home") is True:
+            return "home"
+        if item.get("is_home") is False:
+            return "away"
+
+        player = player_for(item)
+        if player is not None:
+            return str(player.get("team") or "") or None
+        return None
+
+    def attacking_x(team_side: str | None, home_x: float, away_x: float) -> float:
+        # Starting formation: home is left, away is right.
+        # Therefore home attacks the right half and away attacks the left half.
+        if team_side == "away":
+            return away_x
+        if team_side == "home":
+            return home_x
+        # Unknown ownership stays central instead of silently pretending to be home.
+        return 50.0
 
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
@@ -357,9 +385,18 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             }
 
         if kind == "corner":
-            corner_y = 2.0 if (player_anchor or {"y": 50.0})["y"] < 50.0 else 98.0
+            seed = (
+                int(item.get("id") or 0)
+                + int(item.get("minute") or 0)
+                + int(item.get("sort_order") or 0)
+            )
+            if player_anchor:
+                corner_y = 2.0 if player_anchor["y"] < 50.0 else 98.0
+            else:
+                corner_y = 2.0 if seed % 2 == 0 else 98.0
+            box_y = 43.0 if corner_y < 50.0 else 57.0
             start = {"x": attacking_x(team_side, 99.0, 1.0), "y": corner_y}
-            end = {"x": attacking_x(team_side, 87.0, 13.0), "y": 50.0}
+            end = {"x": attacking_x(team_side, 87.0, 13.0), "y": box_y}
             return {
                 "kind": kind,
                 "source": "inferred",
@@ -375,7 +412,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "y": player_anchor["y"] if player_anchor else 50.0,
             }
             if kind == "shot_off_target":
-                end_y = 8.0 if start["y"] < 50.0 else 92.0
+                # Keep misses close to the goal rather than firing them toward
+                # a pitch corner. Vary the miss deterministically by event id /
+                # minute so multiple shots do not overlap at one point.
+                seed = (
+                    int(item.get("id") or 0)
+                    + int(item.get("minute") or 0)
+                    + int(item.get("sort_order") or 0)
+                )
+                miss_offsets = (-12.0, -8.0, 8.0, 12.0)
+                end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
+            elif kind == "shot_on_target":
+                seed = int(item.get("id") or item.get("minute") or 0)
+                target_offsets = (-5.0, -2.0, 2.0, 5.0)
+                end_y = 50.0 + target_offsets[seed % len(target_offsets)]
             else:
                 end_y = 50.0
             end = {"x": attacking_x(team_side, 99.2, 0.8), "y": end_y}
@@ -395,7 +445,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         elif player_anchor:
             anchor = player_anchor
         else:
-            anchor = {"x": 34.0 if team_side != "away" else 66.0, "y": 50.0}
+            anchor = {
+                "x": 66.0 if team_side == "home" else 34.0 if team_side == "away" else 50.0,
+                "y": 50.0,
+            }
 
         return {
             "kind": kind,
