@@ -360,6 +360,7 @@ def _rank_stats(
         )
         item = {
             "type_id": row.get("type_id"),
+            "period_id": row.get("period_id"),
             "name": row.get("name") or row.get("developer_name") or row.get("code"),
             "developer_name": row.get("developer_name"),
             "group": row.get("stat_group"),
@@ -820,7 +821,7 @@ class BigQueryServingRepository:
             team["stats"] = _rank_stats(
                 team_stats.get(int(team["id"]), []),
                 team_keywords,
-                10,
+                30,
             )
 
         players = []
@@ -828,7 +829,7 @@ class BigQueryServingRepository:
             player["match_stats"] = _rank_stats(
                 player_stats.get(int(player["player_id"]), []),
                 player_keywords,
-                10,
+                40,
             )
             players.append(player)
 
