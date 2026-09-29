@@ -440,6 +440,25 @@ class BigQueryServingRepository:
               WHERE e.fixture_id = @fixture_id
                 AND LOWER(COALESCE(ty.name, ty.developer_name, '')) LIKE '%goal%'
               GROUP BY e.team_id
+            ),
+            events AS (
+              SELECT
+                e.event_id,
+                e.minute,
+                e.extra_minute,
+                e.type_id,
+                e.team_id,
+                e.player_id,
+                e.player_name,
+                e.related_player_name,
+                e.info,
+                e.addition,
+                e.result,
+                ty.name AS type_name,
+                ty.developer_name AS type_developer_name
+              FROM {self._table("fixture_events")} e
+              LEFT JOIN {self._table("types")} ty USING (type_id)
+              WHERE e.fixture_id = @fixture_id
             )
             SELECT
               'fixture' AS row_kind,
@@ -515,6 +534,24 @@ class BigQueryServingRepository:
                 s.value
               )) AS payload
             FROM stats s
+
+            UNION ALL
+
+            SELECT
+              'event' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                e.event_id AS id,
+                e.minute,
+                e.extra_minute,
+                COALESCE(e.type_name, e.type_developer_name, e.info, 'event') AS type,
+                e.team_id,
+                e.player_id,
+                e.player_name AS player,
+                e.related_player_name,
+                COALESCE(e.info, e.addition, e.type_name, e.type_developer_name, 'Event') AS text,
+                e.result AS class
+              )) AS payload
+            FROM events e
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )
@@ -525,6 +562,7 @@ class BigQueryServingRepository:
         team_stats: dict[int, list[dict[str, Any]]] = {}
         player_stats: dict[int, list[dict[str, Any]]] = {}
         game_stats: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -545,6 +583,25 @@ class BigQueryServingRepository:
                 player_stats.setdefault(int(data["player_id"]), []).append(data)
             elif kind == "game_stat":
                 game_stats.append(data)
+            elif kind == "event":
+                team_id = data.get("team_id")
+                data["is_home"] = (
+                    int(team_id) == int(teams_by_location["home"]["id"])
+                    if team_id is not None and "home" in teams_by_location
+                    else None
+                )
+                normalized = str(data.get("type") or "event").casefold()
+                if "goal" in normalized:
+                    data["type"] = "goal"
+                elif "substitution" in normalized:
+                    data["type"] = "substitution"
+                    data["player_in"] = data.get("related_player_name")
+                    data["player_out"] = data.get("player")
+                elif "card" in normalized:
+                    data["type"] = "card"
+                elif "shot" in normalized:
+                    data["type"] = "shot"
+                events.append(data)
 
         if fixture is None:
             raise LookupError(f"Fixture {fixture_id} not found in BigQuery")
@@ -632,12 +689,21 @@ class BigQueryServingRepository:
             3,
         )
 
+        events.sort(
+            key=lambda event: (
+                event.get("minute") if event.get("minute") is not None else 999,
+                event.get("extra_minute") if event.get("extra_minute") is not None else 0,
+                event.get("id") if event.get("id") is not None else 0,
+            )
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
             "away_team": away,
             "game_stats": default_game_stats + extra_game_stats,
             "players": players,
+            "events": events,
             "source": "bigquery",
         }
 
