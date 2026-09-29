@@ -92,7 +92,10 @@ def detail_statistics(details: Any) -> dict[str, Any]:
             continue
         stat_type = detail.get("type")
         stat_name = name(stat_type) or f"stat_{detail.get('type_id', 'unknown')}"
-        results[slug(stat_name)] = detail.get("value")
+        # Fixture lineup details use `data`; season/player statistics use
+        # `value`. Support both shapes so callers can normalize either.
+        raw_value = detail.get("data") if "data" in detail else detail.get("value")
+        results[slug(stat_name)] = raw_value
     return results
 
 
