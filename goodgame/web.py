@@ -9,11 +9,14 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 
-from goodgame.ingestion.factory import create_provider
-from goodgame.ingestion.sportmonks.client import SportmonksError
+from goodgame.ingestion.bigquery.provider import BigQueryProvider
+from goodgame.serving.bigquery_repository import BigQueryServingRepository
+from goodgame.serving.repository_factory import create_serving_repository
 from goodgame.pipeline import GoodGamePipeline
 
 
@@ -38,10 +41,15 @@ app.add_middleware(
 )
 
 
-def _provider():
-    # The web/API read path comes from normalized GCP data. Sportmonks is an
-    # ingestion source and should not be called by frontend requests.
-    return create_provider("bigquery")
+def _provider() -> BigQueryProvider:
+    # Compatibility path for older endpoints.
+    return BigQueryProvider()
+
+
+def _serving_repository():
+    # Primary frontend read path. DATA_MODE=gcp uses BigQuery; DATA_MODE=demo
+    # reads the packaged snapshot. The API contract stays identical.
+    return create_serving_repository()
 
 
 def _integer(value: Any) -> int | None:
@@ -361,76 +369,43 @@ def _ball_coordinates(fixture: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "data_mode": os.environ.get("DATA_MODE", "gcp"),
+    }
 
 
 @app.get("/api/competitions")
 def competitions() -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_competitions()
-    except (ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+        rows = _serving_repository().list_competitions()
+    except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    unique: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        competition_id = _integer(row.get("competition_id"))
-        competition_name = row.get("competition_name")
-        if competition_id is not None and competition_name:
-            unique[competition_id] = {
-                "id": competition_id,
-                "name": str(competition_name),
-            }
-
-    return sorted(unique.values(), key=lambda item: item["name"].casefold())
+    return rows
 
 
 
 @app.get("/api/competitions/{competition_id}/seasons")
 def seasons(competition_id: int) -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_competitions()
-    except (ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+        rows = _serving_repository().list_seasons(competition_id)
+    except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    unique: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        row_competition_id = _integer(row.get("competition_id"))
-        season_id = _integer(row.get("season_id"))
-        season_name = row.get("season_name")
-        if (
-            row_competition_id == competition_id
-            and season_id is not None
-            and season_name
-        ):
-            unique[season_id] = {
-                "id": season_id,
-                "name": str(season_name),
-                "competition_id": competition_id,
-            }
-
-    return sorted(unique.values(), key=lambda item: item["name"], reverse=True)
+    return rows
 
 
 @app.get("/api/competitions/{competition_id}/seasons/{season_id}/matches")
 def matches(competition_id: int, season_id: int) -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_matches(competition_id, season_id)
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+        rows = _serving_repository().list_matches(competition_id, season_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    return [
-        {
-            "id": _integer(row.get("match_id")),
-            "date": row.get("match_date"),
-            "home_team": row.get("home_team"),
-            "away_team": row.get("away_team"),
-            "home_score": row.get("home_score"),
-            "away_score": row.get("away_score"),
-        }
-        for row in rows
-        if _integer(row.get("match_id")) is not None
-    ]
+    return rows
 
 
 @app.get("/api/matches/{match_id}/visualization")
@@ -440,7 +415,7 @@ def match_visualization(match_id: int) -> dict[str, Any]:
     try:
         fixture = provider.get_fixture(match_id)
         match = provider.get_match(match_id)
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     colors = _team_colors(fixture)
@@ -570,7 +545,7 @@ def match_analysis(match_id: int) -> dict[str, Any]:
             if callable(getattr(provider, "get_fixture_xg", None))
             else []
         )
-    except (LookupError, ValueError, SportmonksError, GoogleAPIError, GoogleAuthError) as error:
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     return {
@@ -584,3 +559,154 @@ def match_analysis(match_id: int) -> dict[str, Any]:
         "statistics": fixture_statistics,
         "xg": fixture_xg,
     }
+
+
+
+@app.get("/api/games/{fixture_id}/dashboard")
+def game_dashboard(fixture_id: int) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_game_dashboard", None)):
+            raise ValueError("Configured provider does not support game dashboards")
+        return provider.get_game_dashboard(fixture_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/games/{fixture_id}/players/{player_id}")
+def game_player_dashboard(fixture_id: int, player_id: int) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_game_player_dashboard", None)):
+            raise ValueError("Configured provider does not support game-player dashboards")
+        return provider.get_game_player_dashboard(fixture_id, player_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/teams/{team_id}/dashboard")
+def team_dashboard(
+    team_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_team_dashboard", None)):
+            raise ValueError("Configured provider does not support team dashboards")
+        return provider.get_team_dashboard(
+            team_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/players/{player_id}/dashboard")
+def player_dashboard(
+    player_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_player_dashboard", None)):
+            raise ValueError("Configured provider does not support player dashboards")
+        return provider.get_player_dashboard(
+            player_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+@app.get("/api/seasons/{season_id}/teams")
+def season_teams(
+    season_id: int,
+    competition_id: int | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        return _serving_repository().list_teams(
+            season_id=season_id,
+            competition_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/seasons/{season_id}/players")
+def season_players(
+    season_id: int,
+    competition_id: int | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        return _serving_repository().list_players(
+            season_id=season_id,
+            competition_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+@app.get("/api/games/{fixture_id}")
+def game_view(fixture_id: int) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_game_view(fixture_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/teams/{team_id}")
+def team_view(
+    team_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_team_view(
+            team_id=team_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/players/{player_id}")
+def player_view(
+    player_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        return _serving_repository().get_player_view(
+            player_id=player_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+STATIC_DIR = os.environ.get("GOODGAME_STATIC_DIR", "static")
+
+if os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def frontend_root():
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def frontend_spa(full_path: str):
+        candidate = os.path.join(STATIC_DIR, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
