@@ -11,7 +11,12 @@ if [[ ! -f "${FRONTEND_REPO}/package.json" ]]; then
 fi
 
 pushd "${FRONTEND_REPO}" >/dev/null
-npm install
+if [[ -f package-lock.json ]]; then
+  npm ci --ignore-scripts
+else
+  echo "WARNING: package-lock.json is missing; falling back to npm install." >&2
+  npm install --ignore-scripts
+fi
 npm run build
 popd >/dev/null
 
