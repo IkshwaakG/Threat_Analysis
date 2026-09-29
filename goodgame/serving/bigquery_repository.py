@@ -16,6 +16,7 @@ from google.cloud import bigquery
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "gg-football-data")
 CORE_DATASET = os.environ.get("BIGQUERY_CORE_DATASET", "football_core")
+RAW_DATASET = os.environ.get("BIGQUERY_RAW_DATASET", "football_raw")
 BQ_LOCATION = os.environ.get("BIGQUERY_LOCATION", "US")
 BQ_MAX_BYTES_BILLED = int(
     os.environ.get("GOODGAME_BIGQUERY_MAX_BYTES_BILLED", "1000000000")
@@ -391,6 +392,9 @@ class BigQueryServingRepository:
     def _table(self, name: str) -> str:
         return f"`{self.project_id}.{self.dataset}.{name}`"
 
+    def _raw_table(self, name: str) -> str:
+        return f"`{self.project_id}.{RAW_DATASET}.{name}`"
+
     def _query(
         self,
         sql: str,
@@ -625,7 +629,7 @@ class BigQueryServingRepository:
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE e.fixture_id = @fixture_id
             ),
-            timeline AS (
+            normalized_timeline AS (
               SELECT
                 t.timeline_id,
                 t.minute,
@@ -644,6 +648,39 @@ class BigQueryServingRepository:
               FROM {self._table("fixture_timeline")} t
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE t.fixture_id = @fixture_id
+            ),
+            raw_timeline AS (
+              SELECT
+                SAFE_CAST(JSON_VALUE(item, '$.id') AS INT64) AS timeline_id,
+                SAFE_CAST(JSON_VALUE(item, '$.minute') AS INT64) AS minute,
+                SAFE_CAST(JSON_VALUE(item, '$.extra_minute') AS INT64) AS extra_minute,
+                SAFE_CAST(JSON_VALUE(item, '$.type_id') AS INT64) AS type_id,
+                SAFE_CAST(JSON_VALUE(item, '$.participant_id') AS INT64) AS team_id,
+                SAFE_CAST(JSON_VALUE(item, '$.player_id') AS INT64) AS player_id,
+                SAFE_CAST(JSON_VALUE(item, '$.related_player_id') AS INT64) AS related_player_id,
+                JSON_VALUE(item, '$.info') AS info,
+                JSON_VALUE(item, '$.addition') AS addition,
+                JSON_VALUE(item, '$.result') AS result,
+                SAFE_CAST(JSON_VALUE(item, '$.sort_order') AS INT64) AS sort_order,
+                item AS raw_timeline,
+                CAST(NULL AS STRING) AS type_name,
+                CAST(NULL AS STRING) AS type_developer_name
+              FROM (
+                SELECT payload
+                FROM {self._raw_table("api_responses")}
+                WHERE provider = 'sportmonks'
+                  AND entity_type = 'fixture'
+                  AND SAFE_CAST(JSON_VALUE(payload, '$.id') AS INT64) = @fixture_id
+                ORDER BY fetched_at DESC
+                LIMIT 1
+              ) raw,
+              UNNEST(IFNULL(JSON_QUERY_ARRAY(raw.payload, '$.timeline'), [])) AS item
+            ),
+            timeline AS (
+              SELECT * FROM normalized_timeline
+              UNION ALL
+              SELECT * FROM raw_timeline
+              WHERE NOT EXISTS (SELECT 1 FROM normalized_timeline)
             ),
             scores AS (
               SELECT score_id, type_id, team_id, goals, participant, description
