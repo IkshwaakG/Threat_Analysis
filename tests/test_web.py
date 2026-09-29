@@ -63,7 +63,7 @@ class GoodGameWebTests(unittest.TestCase):
         body = response.json()
 
         self.assertEqual(body["schema_version"], "1")
-        self.assertEqual(body["provider"], "sportmonks")
+        self.assertEqual(body["provider"], "bigquery")
         self.assertEqual(body["match"]["id"], 42)
         self.assertEqual(body["match"]["home_team"]["name"], "Manchester United")
         self.assertEqual(body["events"][0]["player"], "Bruno Fernandes")
