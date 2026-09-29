@@ -41,6 +41,67 @@ def _stat_value(value: Any) -> Any:
     return value
 
 
+def _comparison_stats(
+    home_rows: list[dict[str, Any]],
+    away_rows: list[dict[str, Any]],
+    keywords: tuple[str, ...],
+    limit: int,
+) -> list[dict[str, Any]]:
+    def keyed(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            key = str(
+                row.get("developer_name")
+                or row.get("name")
+                or row.get("code")
+                or row.get("type_id")
+                or ""
+            ).casefold()
+            if key:
+                result[key] = row
+        return result
+
+    home = keyed(home_rows)
+    away = keyed(away_rows)
+    comparisons: list[dict[str, Any]] = []
+
+    for keyword in keywords:
+        match_key = next(
+            (
+                key
+                for key in list(home.keys()) + list(away.keys())
+                if keyword in key.replace("_", " ").replace("-", " ")
+            ),
+            None,
+        )
+        if match_key is None:
+            continue
+        home_row = home.get(match_key, {})
+        away_row = away.get(match_key, {})
+        label = (
+            home_row.get("name")
+            or away_row.get("name")
+            or home_row.get("developer_name")
+            or away_row.get("developer_name")
+            or keyword.title()
+        )
+        comparisons.append(
+            {
+                "type_id": home_row.get("type_id") or away_row.get("type_id"),
+                "name": label,
+                "developer_name": home_row.get("developer_name")
+                or away_row.get("developer_name"),
+                "group": home_row.get("stat_group") or away_row.get("stat_group"),
+                "value": f"{_stat_value(home_row.get('value')) if home_row else '–'} - "
+                f"{_stat_value(away_row.get('value')) if away_row else '–'}",
+            }
+        )
+        if len(comparisons) >= limit:
+            break
+
+    return comparisons
+
+
 def _rank_stats(
     rows: list[dict[str, Any]],
     keywords: tuple[str, ...],
@@ -350,15 +411,34 @@ class BigQueryServingRepository:
             )
         )
 
+        default_game_stats = _comparison_stats(
+            team_stats.get(int(home["id"]), []),
+            team_stats.get(int(away["id"]), []),
+            (
+                "possession",
+                "expected goal",
+                "xg",
+                "shots on target",
+                "shot",
+                "pass",
+                "corner",
+                "foul",
+                "offside",
+                "save",
+            ),
+            10,
+        )
+        extra_game_stats = _rank_stats(
+            game_stats,
+            ("attendance", "duration", "weather"),
+            3,
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
             "away_team": away,
-            "game_stats": _rank_stats(
-                game_stats,
-                ("attendance", "duration", "weather", "goal", "shot"),
-                10,
-            ),
+            "game_stats": default_game_stats + extra_game_stats,
             "players": players,
             "source": "bigquery",
         }
