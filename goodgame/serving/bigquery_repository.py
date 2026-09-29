@@ -47,6 +47,129 @@ def _stat_value(value: Any) -> Any:
     return value
 
 
+def _coordinate_pair(value: Any) -> tuple[float, float] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+
+    if isinstance(value, dict):
+        if "x" in value and "y" in value:
+            try:
+                x = float(value["x"])
+                y = float(value["y"])
+            except (TypeError, ValueError):
+                return None
+        else:
+            for key in ("coordinates", "location", "position", "point"):
+                if key in value:
+                    pair = _coordinate_pair(value.get(key))
+                    if pair is not None:
+                        return pair
+            return None
+    elif isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            x = float(value[0])
+            y = float(value[1])
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+
+    if abs(x) <= 1.5 and abs(y) <= 1.5:
+        x *= 100.0
+        y *= 100.0
+    elif x <= 120.0 and y <= 80.0 and (x > 100.0 or y > 100.0):
+        x = x / 120.0 * 100.0
+        y = y / 80.0 * 100.0
+
+    return (
+        round(max(0.0, min(100.0, x)), 3),
+        round(max(0.0, min(100.0, y)), 3),
+    )
+
+
+def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+
+    shot = raw.get("shot") if isinstance(raw.get("shot"), dict) else {}
+
+    start = None
+    for candidate in (
+        raw.get("coordinates"),
+        raw.get("location"),
+        raw.get("start_coordinates"),
+        raw.get("start_location"),
+        shot.get("coordinates"),
+        shot.get("location"),
+    ):
+        start = _coordinate_pair(candidate)
+        if start is not None:
+            break
+
+    end = None
+    for candidate in (
+        raw.get("end_coordinates"),
+        raw.get("end_location"),
+        raw.get("goal_coordinates"),
+        raw.get("target_coordinates"),
+        shot.get("end_coordinates"),
+        shot.get("end_location"),
+        shot.get("goal_coordinates"),
+    ):
+        end = _coordinate_pair(candidate)
+        if end is not None:
+            break
+
+    normalized = event_type.casefold()
+    if start is not None and end is None and "goal" in normalized and is_home is not None:
+        end = (100.0 if is_home else 0.0, 50.0)
+
+    if start is None:
+        return None
+
+    return {
+        "start": {"x": start[0], "y": start[1]},
+        "end": {"x": end[0], "y": end[1]} if end is not None else None,
+    }
+
+
+def _event_player_positions(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(raw, dict):
+        return []
+
+    candidates = raw.get("player_positions") or raw.get("positions") or raw.get("tracking")
+    if not isinstance(candidates, list):
+        return []
+
+    result: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        pair = _coordinate_pair(item)
+        player_id = item.get("player_id") or item.get("id")
+        if pair is None or player_id is None:
+            continue
+        try:
+            player_id = int(player_id)
+        except (TypeError, ValueError):
+            continue
+        result.append({"player_id": player_id, "x": pair[0], "y": pair[1]})
+    return result
+
+
 def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Prefer stored season totals; otherwise aggregate fixture-level DB stats."""
     season_rows = [row for row in rows if row.get("fixture_id") is None]
@@ -454,6 +577,7 @@ class BigQueryServingRepository:
                 e.info,
                 e.addition,
                 e.result,
+                e.raw_event,
                 ty.name AS type_name,
                 ty.developer_name AS type_developer_name
               FROM {self._table("fixture_events")} e
@@ -549,7 +673,8 @@ class BigQueryServingRepository:
                 e.player_name AS player,
                 e.related_player_name,
                 COALESCE(e.info, e.addition, e.type_name, e.type_developer_name, 'Event') AS text,
-                e.result AS class
+                e.result AS class,
+                e.raw_event
               )) AS payload
             FROM events e
             """,
@@ -601,6 +726,13 @@ class BigQueryServingRepository:
                     data["type"] = "card"
                 elif "shot" in normalized:
                     data["type"] = "shot"
+                raw_event = data.pop("raw_event", None)
+                data["ball_path"] = _event_ball_path(
+                    raw_event,
+                    is_home=data.get("is_home"),
+                    event_type=str(data.get("type") or "event"),
+                )
+                data["player_positions"] = _event_player_positions(raw_event)
                 events.append(data)
 
         if fixture is None:
@@ -814,6 +946,7 @@ class BigQueryServingRepository:
             SELECT
               'stat' AS row_kind,
               TO_JSON_STRING(STRUCT(
+                fixture_id,
                 type_id,
                 name,
                 code,
@@ -928,6 +1061,7 @@ class BigQueryServingRepository:
             ),
             player_stats AS (
               SELECT
+                s.fixture_id,
                 s.type_id,
                 s.value,
                 ty.name,
@@ -938,7 +1072,6 @@ class BigQueryServingRepository:
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE s.player_id = @player_id
                 AND s.season_id = @season_id
-                AND s.fixture_id IS NULL
                 AND (@league_id IS NULL OR s.league_id = @league_id)
             ),
             player_teams AS (
@@ -1012,6 +1145,7 @@ class BigQueryServingRepository:
             SELECT
               'stat' AS row_kind,
               TO_JSON_STRING(STRUCT(
+                fixture_id,
                 type_id,
                 name,
                 code,
