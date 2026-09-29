@@ -1,10 +1,17 @@
 .git
 .venv
+venv
 __pycache__
 *.pyc
 .pytest_cache
 node_modules
 .env
 .env.*
+credentials*.json
+service-account*.json
+*-credentials.json
+*.pem
+*.key
+*.p12
 postman
 tests
