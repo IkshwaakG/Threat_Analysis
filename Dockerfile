@@ -8,10 +8,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-serving.txt .
+RUN pip install --no-cache-dir -r requirements-serving.txt
 
-COPY goodgame ./goodgame
+RUN mkdir -p /app/goodgame
+COPY goodgame/__init__.py ./goodgame/__init__.py
+COPY goodgame/web.py ./goodgame/web.py
+COPY goodgame/serving ./goodgame/serving
 COPY demo_data ./demo_data
 COPY static ./static
 
