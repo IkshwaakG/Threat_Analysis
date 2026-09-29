@@ -616,6 +616,85 @@ class BigQueryServingRepository:
         )
         return [dict(row.items()) for row in rows]
 
+    def search_entities(
+        self,
+        query: str,
+        season_id: int | None = None,
+        league_id: int | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Search players and teams with one bounded BigQuery job."""
+
+        normalized = query.strip().casefold()
+        if len(normalized) < 2:
+            return []
+
+        rows = self._query(
+            f"""
+            WITH team_matches AS (
+              SELECT
+                'team' AS entity_type,
+                team_id AS id,
+                name,
+                short_code AS subtitle,
+                image_path AS image,
+                league_id,
+                season_id,
+                CASE
+                  WHEN LOWER(name) = @query THEN 0
+                  WHEN STARTS_WITH(LOWER(name), @query) THEN 1
+                  ELSE 2
+                END AS rank
+              FROM {self._table("teams")}
+              WHERE LOWER(name) LIKE CONCAT('%', @query, '%')
+                AND (@season_id IS NULL OR season_id = @season_id)
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY team_id
+                ORDER BY rank, updated_at DESC
+              ) = 1
+            ),
+            player_matches AS (
+              SELECT
+                'player' AS entity_type,
+                player_id AS id,
+                COALESCE(display_name, name, common_name) AS name,
+                CAST(position_id AS STRING) AS subtitle,
+                image_path AS image,
+                league_id,
+                season_id,
+                CASE
+                  WHEN LOWER(COALESCE(display_name, name, common_name)) = @query THEN 0
+                  WHEN STARTS_WITH(LOWER(COALESCE(display_name, name, common_name)), @query) THEN 1
+                  ELSE 2
+                END AS rank
+              FROM {self._table("players")}
+              WHERE LOWER(COALESCE(display_name, name, common_name)) LIKE CONCAT('%', @query, '%')
+                AND (@season_id IS NULL OR season_id = @season_id)
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY player_id
+                ORDER BY rank, updated_at DESC
+              ) = 1
+            )
+            SELECT entity_type, id, name, subtitle, image, league_id, season_id
+            FROM (
+              SELECT * FROM team_matches
+              UNION ALL
+              SELECT * FROM player_matches
+            )
+            ORDER BY rank, name
+            LIMIT @limit
+            """,
+            [
+                bigquery.ScalarQueryParameter("query", "STRING", normalized),
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("league_id", "INT64", league_id),
+                bigquery.ScalarQueryParameter("limit", "INT64", max(1, min(limit, 20))),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
     def get_game_view(self, fixture_id: int) -> dict[str, Any]:
         """Return everything the game screen needs using one BigQuery job."""
 
