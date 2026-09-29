@@ -17,6 +17,12 @@ from google.cloud import bigquery
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "gg-football-data")
 CORE_DATASET = os.environ.get("BIGQUERY_CORE_DATASET", "football_core")
 BQ_LOCATION = os.environ.get("BIGQUERY_LOCATION", "US")
+BQ_MAX_BYTES_BILLED = int(
+    os.environ.get("GOODGAME_BIGQUERY_MAX_BYTES_BILLED", "1000000000")
+)
+BQ_QUERY_TIMEOUT_SECONDS = float(
+    os.environ.get("GOODGAME_BIGQUERY_TIMEOUT_SECONDS", "20")
+)
 
 
 def _payload(row: Any) -> dict[str, Any]:
@@ -158,8 +164,13 @@ class BigQueryServingRepository:
         sql: str,
         params: list[bigquery.ScalarQueryParameter],
     ) -> list[Any]:
-        config = bigquery.QueryJobConfig(query_parameters=params)
-        return list(self.client.query(sql, job_config=config).result())
+        config = bigquery.QueryJobConfig(
+            query_parameters=params,
+            maximum_bytes_billed=BQ_MAX_BYTES_BILLED,
+            use_query_cache=True,
+        )
+        job = self.client.query(sql, job_config=config)
+        return list(job.result(timeout=BQ_QUERY_TIMEOUT_SECONDS))
 
     def list_competitions(self) -> list[dict[str, Any]]:
         rows = self._query(
