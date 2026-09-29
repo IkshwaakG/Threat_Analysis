@@ -264,6 +264,166 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _spatial_flow(game: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reconstruct ball movement from stored events + timeline.
+
+    This is explicitly inferred unless a stored coordinate is present.
+    Substitutions and cards do not participate in spatial playback.
+    """
+    visual_players = _visual_players(game)
+    players_by_id = {
+        int(player["player_id"]): player
+        for player in visual_players
+        if player.get("player_id") is not None
+    }
+
+    combined: list[dict[str, Any]] = []
+    for source_name in ("timeline", "events"):
+        for item in game.get(source_name, []) or []:
+            if isinstance(item, dict):
+                combined.append({**item, "_source_kind": source_name})
+
+    combined.sort(
+        key=lambda item: (
+            item.get("minute") if item.get("minute") is not None else 999,
+            item.get("extra_minute") if item.get("extra_minute") is not None else 0,
+            0 if item.get("_source_kind") == "timeline" else 1,
+            item.get("sort_order") if item.get("sort_order") is not None else 999,
+            item.get("id") if item.get("id") is not None else 0,
+        )
+    )
+
+    flow: list[dict[str, Any]] = [{
+        "event_id": None,
+        "minute": 0,
+        "x": 50.0,
+        "y": 50.0,
+        "source": "inferred",
+        "reason": "kickoff",
+        "label": "Kickoff",
+        "team": None,
+        "player_id": None,
+    }]
+
+    def attacking_goal(is_home: bool | None) -> float:
+        return 98.0 if is_home is not False else 2.0
+
+    def attacking_zone(is_home: bool | None) -> float:
+        return 74.0 if is_home is not False else 26.0
+
+    for item in combined:
+        item_type = str(item.get("type") or "").casefold()
+        text = str(item.get("text") or item.get("addition") or item_type or "Event")
+        searchable = f"{item_type} {text}".casefold()
+
+        if "substitution" in searchable or "card" in searchable:
+            continue
+
+        useful = any(
+            token in searchable
+            for token in (
+                "goal",
+                "corner",
+                "shot on target",
+                "shot off target",
+                "shot",
+                "offside",
+                "penalty",
+                "kickoff",
+                "kick off",
+            )
+        )
+        if not useful and item.get("_source_kind") == "timeline":
+            continue
+
+        is_home = item.get("is_home")
+        player_id = item.get("player_id")
+        player = None
+        if player_id is not None:
+            try:
+                player = players_by_id.get(int(player_id))
+            except (TypeError, ValueError):
+                player = None
+
+        stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
+        stored_point = None
+        if stored_path:
+            end = stored_path.get("end")
+            start = stored_path.get("start")
+            stored_point = end if isinstance(end, dict) else start if isinstance(start, dict) else None
+
+        if stored_point and stored_point.get("x") is not None and stored_point.get("y") is not None:
+            x = float(stored_point["x"])
+            y = float(stored_point["y"])
+            source = "stored"
+            reason = "provider_coordinate"
+        elif "kickoff" in searchable or "kick off" in searchable:
+            x, y = 50.0, 50.0
+            source, reason = "inferred", "kickoff"
+        elif "corner" in searchable:
+            x = attacking_goal(is_home)
+            previous_y = float(flow[-1].get("y") or 50.0)
+            y = 2.0 if previous_y < 50.0 else 98.0
+            source, reason = "inferred", "corner"
+        elif "goal" in searchable:
+            x, y = attacking_goal(is_home), 50.0
+            source, reason = "inferred", "goal"
+        elif "penalty" in searchable:
+            x, y = ((88.0, 50.0) if is_home is not False else (12.0, 50.0))
+            source, reason = "inferred", "penalty"
+        elif "shot on target" in searchable:
+            x = attacking_goal(is_home)
+            y = 44.0 + (len(flow) % 4) * 4.0
+            source, reason = "inferred", "shot_on_target"
+        elif "shot off target" in searchable:
+            x = attacking_goal(is_home)
+            y = 8.0 if len(flow) % 2 == 0 else 92.0
+            source, reason = "inferred", "shot_off_target"
+        elif "shot" in searchable:
+            x = attacking_zone(is_home)
+            y = float(player.get("y") or 50.0) if player else 50.0
+            source, reason = "inferred", "shot"
+        elif "offside" in searchable:
+            x = 82.0 if is_home is not False else 18.0
+            y = float(player.get("y") or 50.0) if player else 50.0
+            source, reason = "inferred", "offside"
+        elif player is not None:
+            x = float(player.get("x") or 50.0)
+            y = float(player.get("y") or 50.0)
+            source, reason = "inferred", "player_formation_area"
+        else:
+            continue
+
+        flow.append({
+            "event_id": item.get("id"),
+            "minute": item.get("minute"),
+            "extra_minute": item.get("extra_minute"),
+            "x": round(max(0.0, min(100.0, x)), 3),
+            "y": round(max(0.0, min(100.0, y)), 3),
+            "source": source,
+            "reason": reason,
+            "label": text,
+            "team": "home" if is_home is True else "away" if is_home is False else None,
+            "player_id": player_id if reason == "goal" else None,
+        })
+
+        if reason == "goal":
+            flow.append({
+                "event_id": item.get("id"),
+                "minute": item.get("minute"),
+                "extra_minute": item.get("extra_minute"),
+                "x": 50.0,
+                "y": 50.0,
+                "source": "inferred",
+                "reason": "restart",
+                "label": "Restart",
+                "team": None,
+                "player_id": None,
+            })
+
+    return flow
+
+
 @app.get("/health")
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -331,7 +491,9 @@ def season_players(
 def game_view(fixture_id: int) -> dict[str, Any]:
     _positive(fixture_id, "fixture_id")
     try:
-        return _repository().get_game_view(fixture_id)
+        game = _repository().get_game_view(fixture_id)
+        game["spatial_flow"] = _spatial_flow(game)
+        return game
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise _service_error(error) from error
 
