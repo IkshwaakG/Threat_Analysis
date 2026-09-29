@@ -169,6 +169,45 @@ def _event_player_positions(raw: Any) -> list[dict[str, Any]]:
         result.append({"player_id": player_id, "x": pair[0], "y": pair[1]})
     return result
 
+def _event_detail(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    shot = raw.get("shot") if isinstance(raw.get("shot"), dict) else {}
+
+    def first(*values: Any) -> Any:
+        for value in values:
+            if value not in (None, "", [], {}):
+                return value
+        return None
+
+    def scalar(value: Any) -> Any:
+        if isinstance(value, dict):
+            return first(
+                value.get("value"),
+                value.get("name"),
+                value.get("label"),
+                value.get("display_name"),
+                value.get("developer_name"),
+            )
+        return value
+
+    result = {
+        "xg": scalar(first(raw.get("xg"), raw.get("expected_goals"), shot.get("xg"), shot.get("expected_goals"))),
+        "xgot": scalar(first(raw.get("xgot"), raw.get("expected_goals_on_target"), shot.get("xgot"), shot.get("expected_goals_on_target"))),
+        "body_part": scalar(first(raw.get("body_part"), raw.get("bodypart"), shot.get("body_part"), shot.get("bodypart"))),
+        "situation": scalar(first(raw.get("situation"), raw.get("play_pattern"), shot.get("situation"), shot.get("play_pattern"))),
+        "outcome": scalar(first(raw.get("outcome"), raw.get("result"), shot.get("outcome"), shot.get("result"))),
+        "shot_type": scalar(first(raw.get("shot_type"), shot.get("type"), raw.get("type"))),
+    }
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
 
 def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Prefer stored season totals; otherwise aggregate fixture-level DB stats."""
@@ -733,6 +772,7 @@ class BigQueryServingRepository:
                     event_type=str(data.get("type") or "event"),
                 )
                 data["player_positions"] = _event_player_positions(raw_event)
+                data["detail"] = _event_detail(raw_event)
                 events.append(data)
 
         if fixture is None:
