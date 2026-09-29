@@ -748,3 +748,52 @@ class BigQueryProvider(MatchDataProvider):
                 for team in teams
             ],
         }
+
+
+    def list_teams_for_season(
+        self,
+        season_id: int,
+        league_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["season_id = @season_id"]
+        params: list[bigquery.ScalarQueryParameter] = [
+            bigquery.ScalarQueryParameter("season_id", "INT64", season_id)
+        ]
+        if league_id is not None:
+            clauses.append("league_id = @league_id")
+            params.append(bigquery.ScalarQueryParameter("league_id", "INT64", league_id))
+        return self._query(
+            f"""
+            SELECT DISTINCT team_id AS id, name, short_code, image_path
+            FROM {self._table("teams")}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY name
+            """,
+            params,
+        )
+
+    def list_players_for_season(
+        self,
+        season_id: int,
+        league_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["p.season_id = @season_id"]
+        params: list[bigquery.ScalarQueryParameter] = [
+            bigquery.ScalarQueryParameter("season_id", "INT64", season_id)
+        ]
+        if league_id is not None:
+            clauses.append("p.league_id = @league_id")
+            params.append(bigquery.ScalarQueryParameter("league_id", "INT64", league_id))
+        return self._query(
+            f"""
+            SELECT DISTINCT
+              p.player_id AS id,
+              COALESCE(p.display_name, p.name, p.common_name) AS name,
+              p.position_id,
+              p.image_path
+            FROM {self._table("players")} p
+            WHERE {' AND '.join(clauses)}
+            ORDER BY name
+            """,
+            params,
+        )
