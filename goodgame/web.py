@@ -644,3 +644,38 @@ def player_dashboard(
         )
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+@app.get("/api/seasons/{season_id}/teams")
+def season_teams(
+    season_id: int,
+    competition_id: int | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "list_teams_for_season", None)):
+            raise ValueError("Configured provider does not support team listing")
+        return provider.list_teams_for_season(
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/seasons/{season_id}/players")
+def season_players(
+    season_id: int,
+    competition_id: int | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "list_players_for_season", None)):
+            raise ValueError("Configured provider does not support player listing")
+        return provider.list_players_for_season(
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
