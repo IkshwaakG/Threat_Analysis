@@ -368,8 +368,12 @@ def _ball_coordinates(fixture: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "data_mode": os.environ.get("DATA_MODE", "gcp"),
+    }
 
 
 @app.get("/api/competitions")
@@ -690,7 +694,7 @@ def player_view(
 
 STATIC_DIR = os.environ.get("GOODGAME_STATIC_DIR", "static")
 
-if os.path.isdir(STATIC_DIR):
+if os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
     assets_dir = os.path.join(STATIC_DIR, "assets")
     if os.path.isdir(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
