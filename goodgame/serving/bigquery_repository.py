@@ -47,6 +47,75 @@ def _stat_value(value: Any) -> Any:
     return value
 
 
+def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer stored season totals; otherwise aggregate fixture-level DB stats."""
+    season_rows = [row for row in rows if row.get("fixture_id") is None]
+    if season_rows:
+        return season_rows
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = str(
+            row.get("type_id")
+            or row.get("developer_name")
+            or row.get("name")
+            or row.get("code")
+            or "stat"
+        )
+        grouped.setdefault(key, []).append(row)
+
+    aggregate_rows: list[dict[str, Any]] = []
+    for group in grouped.values():
+        base = dict(group[0])
+        label = str(
+            base.get("developer_name")
+            or base.get("name")
+            or base.get("code")
+            or ""
+        ).casefold().replace("_", " ").replace("-", " ")
+
+        values: list[float] = []
+        for row in group:
+            value = _stat_value(row.get("value"))
+            if isinstance(value, bool):
+                values.append(1.0 if value else 0.0)
+            elif isinstance(value, (int, float)):
+                values.append(float(value))
+            elif isinstance(value, str):
+                cleaned = value.strip().rstrip("%")
+                try:
+                    values.append(float(cleaned))
+                except ValueError:
+                    pass
+
+        if values:
+            should_average = any(
+                token in label
+                for token in (
+                    "rating",
+                    "average",
+                    "accuracy",
+                    "percentage",
+                    "possession",
+                    "per game",
+                    "per match",
+                )
+            )
+            value = sum(values) / len(values) if should_average else sum(values)
+            if all(float(item).is_integer() for item in values) and not should_average:
+                value = int(value)
+            else:
+                value = round(value, 2)
+            base["value"] = value
+        else:
+            base["value"] = _stat_value(base.get("value"))
+
+        base["fixture_id"] = None
+        aggregate_rows.append(base)
+
+    return aggregate_rows
+
+
 def _comparison_stats(
     home_rows: list[dict[str, Any]],
     away_rows: list[dict[str, Any]],
@@ -594,6 +663,7 @@ class BigQueryServingRepository:
             ),
             team_stats AS (
               SELECT
+                s.fixture_id,
                 s.type_id,
                 s.value,
                 ty.name,
@@ -604,7 +674,6 @@ class BigQueryServingRepository:
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE s.team_id = @team_id
                 AND s.season_id = @season_id
-                AND s.fixture_id IS NULL
                 AND (@league_id IS NULL OR s.league_id = @league_id)
             ),
             team_players AS (
@@ -750,7 +819,7 @@ class BigQueryServingRepository:
         return {
             "team": team,
             "stats": _rank_stats(
-                stats,
+                _profile_stat_rows(stats),
                 (
                     "point",
                     "goal",
@@ -948,7 +1017,7 @@ class BigQueryServingRepository:
         return {
             "player": player,
             "stats": _rank_stats(
-                stats,
+                _profile_stat_rows(stats),
                 (
                     "rating",
                     "appearance",
