@@ -631,7 +631,7 @@ class BigQueryServingRepository:
 
         rows = self._query(
             f"""
-            WITH team_matches AS (
+            WITH team_candidates AS (
               SELECT
                 'team' AS entity_type,
                 team_id AS id,
@@ -640,6 +640,7 @@ class BigQueryServingRepository:
                 image_path AS image,
                 league_id,
                 season_id,
+                updated_at,
                 CASE
                   WHEN LOWER(name) = @query THEN 0
                   WHEN STARTS_WITH(LOWER(name), @query) THEN 1
@@ -649,12 +650,16 @@ class BigQueryServingRepository:
               WHERE LOWER(name) LIKE CONCAT('%', @query, '%')
                 AND (@season_id IS NULL OR season_id = @season_id)
                 AND (@league_id IS NULL OR league_id = @league_id)
+            ),
+            team_matches AS (
+              SELECT * EXCEPT(updated_at)
+              FROM team_candidates
               QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY team_id
+                PARTITION BY id
                 ORDER BY rank, updated_at DESC
               ) = 1
             ),
-            player_matches AS (
+            player_candidates AS (
               SELECT
                 'player' AS entity_type,
                 player_id AS id,
@@ -663,6 +668,7 @@ class BigQueryServingRepository:
                 image_path AS image,
                 league_id,
                 season_id,
+                updated_at,
                 CASE
                   WHEN LOWER(COALESCE(display_name, name, common_name)) = @query THEN 0
                   WHEN STARTS_WITH(LOWER(COALESCE(display_name, name, common_name)), @query) THEN 1
@@ -672,8 +678,12 @@ class BigQueryServingRepository:
               WHERE LOWER(COALESCE(display_name, name, common_name)) LIKE CONCAT('%', @query, '%')
                 AND (@season_id IS NULL OR season_id = @season_id)
                 AND (@league_id IS NULL OR league_id = @league_id)
+            ),
+            player_matches AS (
+              SELECT * EXCEPT(updated_at)
+              FROM player_candidates
               QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY player_id
+                PARTITION BY id
                 ORDER BY rank, updated_at DESC
               ) = 1
             )
@@ -708,7 +718,7 @@ class BigQueryServingRepository:
             ),
             fixture_facts AS (
               SELECT *
-              FROM ${self._table("fixture_facts")}
+              FROM {self._table("fixture_facts")}
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
@@ -720,9 +730,9 @@ class BigQueryServingRepository:
                 s.position,
                 s.points,
                 s.details
-              FROM ${self._table("standings")} s
+              FROM {self._table("standings")} s
               CROSS JOIN fixture f
-              LEFT JOIN ${self._table("teams")} t
+              LEFT JOIN {self._table("teams")} t
                 ON t.team_id = s.team_id
                AND t.league_id = s.league_id
                AND t.season_id = s.season_id
