@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from goodgame.serving.demo_repository import DemoServingRepository
 
@@ -41,21 +46,13 @@ def main() -> None:
 
             teams = repo.list_teams(season_id, competition_id)
             for team in teams:
-                try:
-                    repo.get_team_view(int(team["id"]), season_id, competition_id)
-                    checked_teams += 1
-                except LookupError:
-                    # A deliberately small demo snapshot may list more picker
-                    # entities than detailed views. That is acceptable.
-                    pass
+                repo.get_team_view(int(team["id"]), season_id, competition_id)
+                checked_teams += 1
 
             players = repo.list_players(season_id, competition_id)
             for player in players:
-                try:
-                    repo.get_player_view(int(player["id"]), season_id, competition_id)
-                    checked_players += 1
-                except LookupError:
-                    pass
+                repo.get_player_view(int(player["id"]), season_id, competition_id)
+                checked_players += 1
 
     if checked_games == 0:
         raise SystemExit("Demo snapshot has no usable game views")
