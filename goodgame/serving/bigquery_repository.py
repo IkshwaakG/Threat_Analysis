@@ -585,7 +585,6 @@ class BigQueryServingRepository:
                 s.period_id,
                 s.team_id,
                 s.player_id,
-                s.period_id,
                 s.entity_type,
                 s.entity_id,
                 s.type_id,
