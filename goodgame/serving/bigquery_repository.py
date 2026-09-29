@@ -664,7 +664,13 @@ class BigQueryServingRepository:
                 'player' AS entity_type,
                 player_id AS id,
                 COALESCE(display_name, name, common_name) AS name,
-                CAST(position_id AS STRING) AS subtitle,
+                CASE position_id
+                  WHEN 24 THEN 'Goalkeeper'
+                  WHEN 25 THEN 'Defender'
+                  WHEN 26 THEN 'Midfielder'
+                  WHEN 27 THEN 'Attacker'
+                  ELSE 'Player'
+                END AS subtitle,
                 image_path AS image,
                 league_id,
                 season_id,
