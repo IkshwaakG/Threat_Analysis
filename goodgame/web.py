@@ -379,24 +379,14 @@ def competitions() -> list[dict[str, Any]]:
     except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    unique: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        competition_id = _integer(row.get("competition_id"))
-        competition_name = row.get("competition_name")
-        if competition_id is not None and competition_name:
-            unique[competition_id] = {
-                "id": competition_id,
-                "name": str(competition_name),
-            }
-
-    return sorted(unique.values(), key=lambda item: item["name"].casefold())
+    return rows
 
 
 
 @app.get("/api/competitions/{competition_id}/seasons")
 def seasons(competition_id: int) -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_competitions()
+        rows = _serving_repository().list_seasons(competition_id)
     except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
