@@ -644,6 +644,41 @@ class BigQueryServingRepository:
               FROM {self._table("fixture_timeline")} t
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE t.fixture_id = @fixture_id
+            ),
+            scores AS (
+              SELECT score_id, type_id, team_id, goals, participant, description
+              FROM {self._table("fixture_scores")}
+              WHERE fixture_id = @fixture_id
+            ),
+            venue AS (
+              SELECT v.*
+              FROM fixture f
+              JOIN {self._table("venues")} v ON v.venue_id = f.venue_id
+              LIMIT 1
+            ),
+            weather AS (
+              SELECT *
+              FROM {self._table("fixture_weather")}
+              WHERE fixture_id = @fixture_id
+              LIMIT 1
+            ),
+            sidelined AS (
+              SELECT
+                s.sideline_id,
+                s.player_id,
+                s.type_id,
+                s.start_date,
+                s.end_date,
+                s.games_missed,
+                p.display_name AS player_name,
+                ty.name AS type_name
+              FROM {self._table("fixture_sidelined")} s
+              LEFT JOIN {self._table("players")} p
+                ON p.player_id = s.player_id
+               AND p.league_id = s.league_id
+               AND p.season_id = s.season_id
+              LEFT JOIN {self._table("types")} ty USING (type_id)
+              WHERE s.fixture_id = @fixture_id
             )
             SELECT
               'fixture' AS row_kind,
@@ -757,6 +792,73 @@ class BigQueryServingRepository:
                 t.raw_timeline
               )) AS payload
             FROM timeline t
+
+            UNION ALL
+
+            SELECT
+              'score' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                s.score_id AS id,
+                s.type_id,
+                s.team_id,
+                s.goals,
+                s.participant,
+                s.description
+              )) AS payload
+            FROM scores s
+
+            UNION ALL
+
+            SELECT
+              'venue' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                v.venue_id AS id,
+                v.name,
+                v.address,
+                v.city_name,
+                v.latitude,
+                v.longitude,
+                v.capacity,
+                v.image_path,
+                v.surface
+              )) AS payload
+            FROM venue v
+
+            UNION ALL
+
+            SELECT
+              'weather' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                w.temperature_day,
+                w.temperature_current,
+                w.feels_like_day,
+                w.feels_like_current,
+                w.wind_speed,
+                w.wind_direction,
+                w.humidity,
+                w.pressure,
+                w.clouds,
+                w.description,
+                w.icon,
+                w.metric
+              )) AS payload
+            FROM weather w
+
+            UNION ALL
+
+            SELECT
+              'sidelined' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                s.sideline_id AS id,
+                s.player_id,
+                s.player_name,
+                s.type_id,
+                s.type_name,
+                CAST(s.start_date AS STRING) AS start_date,
+                CAST(s.end_date AS STRING) AS end_date,
+                s.games_missed
+              )) AS payload
+            FROM sidelined s
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )
@@ -769,6 +871,10 @@ class BigQueryServingRepository:
         game_stats: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         timeline: list[dict[str, Any]] = []
+        scores: list[dict[str, Any]] = []
+        venue: dict[str, Any] | None = None
+        weather: dict[str, Any] | None = None
+        sidelined: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -830,6 +936,14 @@ class BigQueryServingRepository:
                     event_type=str(data.get("type") or data.get("text") or "timeline"),
                 )
                 timeline.append(data)
+            elif kind == "score":
+                scores.append(data)
+            elif kind == "venue":
+                venue = data
+            elif kind == "weather":
+                weather = data
+            elif kind == "sidelined":
+                sidelined.append(data)
 
         if fixture is None:
             raise LookupError(f"Fixture {fixture_id} not found in BigQuery")
@@ -942,6 +1056,10 @@ class BigQueryServingRepository:
             "players": players,
             "events": events,
             "timeline": timeline,
+            "scores": scores,
+            "venue": venue,
+            "weather": weather,
+            "sidelined": sidelined,
             "source": "bigquery",
         }
 
