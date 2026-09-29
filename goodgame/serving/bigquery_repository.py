@@ -48,6 +48,80 @@ def _stat_value(value: Any) -> Any:
     return value
 
 
+def _profile_stat_value(value: Any, label: str = "", matches_played: int | None = None) -> Any:
+    """Flatten Sportmonks season-stat objects into a meaningful display scalar."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            cleaned = value.strip().rstrip("%")
+            try:
+                return float(cleaned) if "." in cleaned else int(cleaned)
+            except ValueError:
+                return value
+
+    normalized = label.casefold().replace("_", " ").replace("-", " ")
+
+    if isinstance(value, dict):
+        # Season statistics frequently arrive as {"all": {...}, "home": {...}, "away": {...}}.
+        if isinstance(value.get("all"), dict):
+            all_value = value["all"]
+            prefer_average = any(
+                token in normalized
+                for token in (
+                    "possession",
+                    "percentage",
+                    "accuracy",
+                    "rating",
+                    "average",
+                    "per game",
+                    "per match",
+                )
+            )
+            preferred_keys = (
+                ("average", "percentage", "value", "count", "total")
+                if prefer_average
+                else ("count", "total", "value", "average", "percentage")
+            )
+            for key in preferred_keys:
+                if key in all_value and not isinstance(all_value[key], (dict, list)):
+                    return all_value[key]
+
+        prefer_average = any(
+            token in normalized
+            for token in (
+                "possession",
+                "percentage",
+                "accuracy",
+                "rating",
+                "average",
+                "per game",
+                "per match",
+            )
+        )
+        preferred_keys = (
+            ("average", "percentage", "value", "count", "total")
+            if prefer_average
+            else ("count", "total", "value", "average", "percentage")
+        )
+        for key in preferred_keys:
+            if key in value and not isinstance(value[key], (dict, list)):
+                return value[key]
+
+        return None
+
+    scalar = _stat_value(value)
+    if (
+        isinstance(scalar, (int, float))
+        and matches_played
+        and matches_played > 0
+        and "possession" in normalized
+        and scalar > 100
+    ):
+        return round(float(scalar) / matches_played, 2)
+    return scalar
+
+
 def _coordinate_pair(value: Any) -> tuple[float, float] | None:
     if isinstance(value, str):
         try:
@@ -210,11 +284,31 @@ def _event_detail(raw: Any) -> dict[str, Any]:
 
 
 
-def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Prefer stored season totals; otherwise aggregate fixture-level DB stats."""
+def _profile_stat_rows(
+    rows: list[dict[str, Any]],
+    *,
+    matches_played: int | None = None,
+) -> list[dict[str, Any]]:
+    """Prefer season totals and flatten provider composites; otherwise aggregate fixtures."""
     season_rows = [row for row in rows if row.get("fixture_id") is None]
     if season_rows:
-        return season_rows
+        cleaned: list[dict[str, Any]] = []
+        for row in season_rows:
+            current = dict(row)
+            label = str(
+                current.get("developer_name")
+                or current.get("name")
+                or current.get("code")
+                or ""
+            )
+            current["value"] = _profile_stat_value(
+                current.get("value"),
+                label,
+                matches_played,
+            )
+            if current["value"] is not None:
+                cleaned.append(current)
+        return cleaned
 
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -239,7 +333,7 @@ def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         values: list[float] = []
         for row in group:
-            value = _stat_value(row.get("value"))
+            value = _profile_stat_value(row.get("value"), label, matches_played)
             if isinstance(value, bool):
                 values.append(1.0 if value else 0.0)
             elif isinstance(value, (int, float)):
@@ -271,7 +365,7 @@ def _profile_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 value = round(value, 2)
             base["value"] = value
         else:
-            base["value"] = _stat_value(base.get("value"))
+            base["value"] = _profile_stat_value(base.get("value"), label, matches_played)
 
         base["fixture_id"] = None
         aggregate_rows.append(base)
@@ -1304,6 +1398,28 @@ class BigQueryServingRepository:
                 ORDER BY p.updated_at DESC
               ) = 1
             ),
+            team_results AS (
+              SELECT
+                COUNT(DISTINCT f.fixture_id) AS matches_played,
+                COUNT(DISTINCT IF(me.winner IS TRUE, f.fixture_id, NULL)) AS wins,
+                COUNT(DISTINCT IF(
+                  NOT EXISTS (
+                    SELECT 1
+                    FROM {self._table("fixture_participants")} allp
+                    WHERE allp.fixture_id = f.fixture_id
+                      AND allp.winner IS TRUE
+                  ),
+                  f.fixture_id,
+                  NULL
+                )) AS draws
+              FROM {self._table("fixtures")} f
+              JOIN {self._table("fixture_participants")} me
+                ON me.fixture_id = f.fixture_id
+               AND me.team_id = @team_id
+              WHERE f.season_id = @season_id
+                AND (@league_id IS NULL OR f.league_id = @league_id)
+                AND f.starting_at <= CURRENT_TIMESTAMP()
+            ),
             recent_fixture_ids AS (
               SELECT f.fixture_id
               FROM {self._table("fixtures")} f
@@ -1380,6 +1496,19 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'summary' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                matches_played,
+                wins,
+                draws,
+                GREATEST(matches_played - wins - draws, 0) AS losses,
+                (wins * 3 + draws) AS points
+              )) AS payload
+            FROM team_results
+
+            UNION ALL
+
+            SELECT
               'fixture' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 fixture_id AS id,
@@ -1405,6 +1534,7 @@ class BigQueryServingRepository:
         stats: list[dict[str, Any]] = []
         players: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
+        summary: dict[str, Any] = {}
 
         for row in rows:
             kind = row["row_kind"]
@@ -1420,29 +1550,45 @@ class BigQueryServingRepository:
             elif kind == "fixture":
                 data["profile_url"] = f"/games/{data['id']}"
                 fixtures.append(data)
+            elif kind == "summary":
+                summary = data
 
         if team is None:
             raise LookupError(f"Team {team_id} not found for season {season_id}")
 
+        season_stats = _rank_stats(
+            _profile_stat_rows(
+                stats,
+                matches_played=int(summary.get("matches_played") or 0),
+            ),
+            (
+                "goal",
+                "expected goal",
+                "xg",
+                "possession",
+                "shot",
+                "pass",
+                "clean sheet",
+                "corner",
+                "foul",
+                "offside",
+            ),
+            30,
+        )
+
+        # Results-derived values are authoritative for season result cards.
+        derived_stats = [
+            {"name": "Points", "developer_name": "points", "value": summary.get("points")},
+            {"name": "Matches", "developer_name": "matches_played", "value": summary.get("matches_played")},
+            {"name": "Wins", "developer_name": "wins", "value": summary.get("wins")},
+            {"name": "Draws", "developer_name": "draws", "value": summary.get("draws")},
+            {"name": "Losses", "developer_name": "losses", "value": summary.get("losses")},
+        ]
+
         return {
             "team": team,
-            "stats": _rank_stats(
-                _profile_stat_rows(stats),
-                (
-                    "point",
-                    "goal",
-                    "expected goal",
-                    "xg",
-                    "possession",
-                    "shot",
-                    "pass",
-                    "clean sheet",
-                    "win",
-                    "draw",
-                    "loss",
-                ),
-                12,
-            ),
+            "summary": summary,
+            "stats": derived_stats + season_stats,
             "players": sorted(players, key=lambda player: str(player.get("name") or "")),
             "recent_fixtures": fixtures,
             "source": "bigquery",
