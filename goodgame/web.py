@@ -9,11 +9,14 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 
 from goodgame.ingestion.bigquery.provider import BigQueryProvider
 from goodgame.serving.bigquery_repository import BigQueryServingRepository
+from goodgame.serving.repository_factory import create_serving_repository
 from goodgame.pipeline import GoodGamePipeline
 
 
@@ -43,9 +46,10 @@ def _provider() -> BigQueryProvider:
     return BigQueryProvider()
 
 
-def _serving_repository() -> BigQueryServingRepository:
-    # Primary frontend read path: one BigQuery job per screen.
-    return BigQueryServingRepository()
+def _serving_repository():
+    # Primary frontend read path. DATA_MODE=gcp uses BigQuery; DATA_MODE=demo
+    # reads the packaged snapshot. The API contract stays identical.
+    return create_serving_repository()
 
 
 def _integer(value: Any) -> int | None:
@@ -371,7 +375,7 @@ def health() -> dict[str, str]:
 @app.get("/api/competitions")
 def competitions() -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_competitions()
+        rows = _serving_repository().list_competitions()
     except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -396,44 +400,17 @@ def seasons(competition_id: int) -> list[dict[str, Any]]:
     except (ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    unique: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        row_competition_id = _integer(row.get("competition_id"))
-        season_id = _integer(row.get("season_id"))
-        season_name = row.get("season_name")
-        if (
-            row_competition_id == competition_id
-            and season_id is not None
-            and season_name
-        ):
-            unique[season_id] = {
-                "id": season_id,
-                "name": str(season_name),
-                "competition_id": competition_id,
-            }
-
-    return sorted(unique.values(), key=lambda item: item["name"], reverse=True)
+    return rows
 
 
 @app.get("/api/competitions/{competition_id}/seasons/{season_id}/matches")
 def matches(competition_id: int, season_id: int) -> list[dict[str, Any]]:
     try:
-        rows = _provider().list_matches(competition_id, season_id)
+        rows = _serving_repository().list_matches(competition_id, season_id)
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    return [
-        {
-            "id": _integer(row.get("match_id")),
-            "date": row.get("match_date"),
-            "home_team": row.get("home_team"),
-            "away_team": row.get("away_team"),
-            "home_score": row.get("home_score"),
-            "away_score": row.get("away_score"),
-        }
-        for row in rows
-        if _integer(row.get("match_id")) is not None
-    ]
+    return rows
 
 
 @app.get("/api/matches/{match_id}/visualization")
@@ -657,12 +634,9 @@ def season_teams(
     competition_id: int | None = None,
 ) -> list[dict[str, Any]]:
     try:
-        provider = _provider()
-        if not callable(getattr(provider, "list_teams_for_season", None)):
-            raise ValueError("Configured provider does not support team listing")
-        return provider.list_teams_for_season(
+        return _serving_repository().list_teams(
             season_id=season_id,
-            league_id=competition_id,
+            competition_id=competition_id,
         )
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -674,12 +648,9 @@ def season_players(
     competition_id: int | None = None,
 ) -> list[dict[str, Any]]:
     try:
-        provider = _provider()
-        if not callable(getattr(provider, "list_players_for_season", None)):
-            raise ValueError("Configured provider does not support player listing")
-        return provider.list_players_for_season(
+        return _serving_repository().list_players(
             season_id=season_id,
-            league_id=competition_id,
+            competition_id=competition_id,
         )
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -724,3 +695,23 @@ def player_view(
         )
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+
+STATIC_DIR = os.environ.get("GOODGAME_STATIC_DIR", "static")
+
+if os.path.isdir(STATIC_DIR):
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def frontend_root():
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def frontend_spa(full_path: str):
+        candidate = os.path.join(STATIC_DIR, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
