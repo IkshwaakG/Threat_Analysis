@@ -583,3 +583,64 @@ def match_analysis(match_id: int) -> dict[str, Any]:
         "statistics": fixture_statistics,
         "xg": fixture_xg,
     }
+
+
+
+@app.get("/api/games/{fixture_id}/dashboard")
+def game_dashboard(fixture_id: int) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_game_dashboard", None)):
+            raise ValueError("Configured provider does not support game dashboards")
+        return provider.get_game_dashboard(fixture_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/games/{fixture_id}/players/{player_id}")
+def game_player_dashboard(fixture_id: int, player_id: int) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_game_player_dashboard", None)):
+            raise ValueError("Configured provider does not support game-player dashboards")
+        return provider.get_game_player_dashboard(fixture_id, player_id)
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/teams/{team_id}/dashboard")
+def team_dashboard(
+    team_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_team_dashboard", None)):
+            raise ValueError("Configured provider does not support team dashboards")
+        return provider.get_team_dashboard(
+            team_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/players/{player_id}/dashboard")
+def player_dashboard(
+    player_id: int,
+    season_id: int,
+    competition_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        provider = _provider()
+        if not callable(getattr(provider, "get_player_dashboard", None)):
+            raise ValueError("Configured provider does not support player dashboards")
+        return provider.get_player_dashboard(
+            player_id,
+            season_id=season_id,
+            league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
