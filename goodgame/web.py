@@ -379,6 +379,54 @@ def competitions() -> list[dict[str, Any]]:
     return sorted(unique.values(), key=lambda item: item["name"].casefold())
 
 
+
+@app.get("/api/competitions/{competition_id}/seasons")
+def seasons(competition_id: int) -> list[dict[str, Any]]:
+    try:
+        rows = _provider().list_competitions()
+    except (ValueError, SportmonksError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    unique: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        row_competition_id = _integer(row.get("competition_id"))
+        season_id = _integer(row.get("season_id"))
+        season_name = row.get("season_name")
+        if (
+            row_competition_id == competition_id
+            and season_id is not None
+            and season_name
+        ):
+            unique[season_id] = {
+                "id": season_id,
+                "name": str(season_name),
+                "competition_id": competition_id,
+            }
+
+    return sorted(unique.values(), key=lambda item: item["name"], reverse=True)
+
+
+@app.get("/api/competitions/{competition_id}/seasons/{season_id}/matches")
+def matches(competition_id: int, season_id: int) -> list[dict[str, Any]]:
+    try:
+        rows = _provider().list_matches(competition_id, season_id)
+    except (LookupError, ValueError, SportmonksError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    return [
+        {
+            "id": _integer(row.get("match_id")),
+            "date": row.get("match_date"),
+            "home_team": row.get("home_team"),
+            "away_team": row.get("away_team"),
+            "home_score": row.get("home_score"),
+            "away_score": row.get("away_score"),
+        }
+        for row in rows
+        if _integer(row.get("match_id")) is not None
+    ]
+
+
 @app.get("/api/matches/{match_id}/visualization")
 def match_visualization(match_id: int) -> dict[str, Any]:
     provider = _provider()
