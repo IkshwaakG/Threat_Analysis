@@ -624,6 +624,26 @@ class BigQueryServingRepository:
               FROM {self._table("fixture_events")} e
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE e.fixture_id = @fixture_id
+            ),
+            timeline AS (
+              SELECT
+                t.timeline_id,
+                t.minute,
+                t.extra_minute,
+                t.type_id,
+                t.team_id,
+                t.player_id,
+                t.related_player_id,
+                t.info,
+                t.addition,
+                t.result,
+                t.sort_order,
+                t.raw_timeline,
+                ty.name AS type_name,
+                ty.developer_name AS type_developer_name
+              FROM {self._table("fixture_timeline")} t
+              LEFT JOIN {self._table("types")} ty USING (type_id)
+              WHERE t.fixture_id = @fixture_id
             )
             SELECT
               'fixture' AS row_kind,
@@ -718,6 +738,25 @@ class BigQueryServingRepository:
                 e.raw_event
               )) AS payload
             FROM events e
+
+            UNION ALL
+
+            SELECT
+              'timeline' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                t.timeline_id AS id,
+                t.minute,
+                t.extra_minute,
+                COALESCE(t.type_name, t.type_developer_name, t.addition, 'timeline') AS type,
+                t.team_id,
+                t.player_id,
+                t.related_player_id,
+                COALESCE(t.addition, t.info, t.type_name, t.type_developer_name, 'Timeline event') AS text,
+                t.result AS class,
+                t.sort_order,
+                t.raw_timeline
+              )) AS payload
+            FROM timeline t
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )
@@ -729,6 +768,7 @@ class BigQueryServingRepository:
         player_stats: dict[int, list[dict[str, Any]]] = {}
         game_stats: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
+        timeline: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -776,6 +816,20 @@ class BigQueryServingRepository:
                 data["player_positions"] = _event_player_positions(raw_event)
                 data["detail"] = _event_detail(raw_event)
                 events.append(data)
+            elif kind == "timeline":
+                team_id = data.get("team_id")
+                data["is_home"] = (
+                    int(team_id) == int(teams_by_location["home"]["id"])
+                    if team_id is not None and "home" in teams_by_location
+                    else None
+                )
+                raw_timeline = data.pop("raw_timeline", None)
+                data["ball_path"] = _event_ball_path(
+                    raw_timeline,
+                    is_home=data.get("is_home"),
+                    event_type=str(data.get("type") or data.get("text") or "timeline"),
+                )
+                timeline.append(data)
 
         if fixture is None:
             raise LookupError(f"Fixture {fixture_id} not found in BigQuery")
@@ -871,6 +925,15 @@ class BigQueryServingRepository:
             )
         )
 
+        timeline.sort(
+            key=lambda item: (
+                item.get("minute") if item.get("minute") is not None else 999,
+                item.get("extra_minute") if item.get("extra_minute") is not None else 0,
+                item.get("sort_order") if item.get("sort_order") is not None else 999,
+                item.get("id") if item.get("id") is not None else 0,
+            )
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
@@ -878,6 +941,7 @@ class BigQueryServingRepository:
             "game_stats": default_game_stats + extra_game_stats,
             "players": players,
             "events": events,
+            "timeline": timeline,
             "source": "bigquery",
         }
 
