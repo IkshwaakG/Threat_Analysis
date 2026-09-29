@@ -161,6 +161,124 @@ class BigQueryServingRepository:
         config = bigquery.QueryJobConfig(query_parameters=params)
         return list(self.client.query(sql, job_config=config).result())
 
+    def list_competitions(self) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"""
+            SELECT DISTINCT
+              l.league_id AS id,
+              l.name
+            FROM {self._table("leagues")} l
+            WHERE EXISTS (
+              SELECT 1
+              FROM {self._table("fixtures")} f
+              WHERE f.league_id = l.league_id
+            )
+            ORDER BY l.name
+            """,
+            [],
+        )
+        return [{"id": int(row["id"]), "name": str(row["name"])} for row in rows]
+
+    def list_seasons(self, competition_id: int) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"""
+            SELECT DISTINCT
+              s.season_id AS id,
+              s.name,
+              s.league_id AS competition_id,
+              s.starting_at
+            FROM {self._table("seasons")} s
+            WHERE s.league_id = @competition_id
+              AND EXISTS (
+                SELECT 1
+                FROM {self._table("fixtures")} f
+                WHERE f.league_id = s.league_id
+                  AND f.season_id = s.season_id
+              )
+            ORDER BY s.starting_at DESC, s.season_id DESC
+            """,
+            [bigquery.ScalarQueryParameter("competition_id", "INT64", competition_id)],
+        )
+        return [
+            {
+                "id": int(row["id"]),
+                "name": str(row["name"]),
+                "competition_id": int(row["competition_id"]),
+            }
+            for row in rows
+        ]
+
+    def list_matches(self, competition_id: int, season_id: int) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"""
+            WITH participants AS (
+              SELECT
+                fp.fixture_id,
+                MAX(IF(fp.location = 'home', t.name, NULL)) AS home_team,
+                MAX(IF(fp.location = 'away', t.name, NULL)) AS away_team
+              FROM {self._table("fixture_participants")} fp
+              LEFT JOIN {self._table("teams")} t
+                ON t.team_id = fp.team_id
+               AND t.league_id = fp.league_id
+               AND t.season_id = fp.season_id
+              WHERE fp.league_id = @competition_id
+                AND fp.season_id = @season_id
+              GROUP BY fp.fixture_id
+            )
+            SELECT
+              f.fixture_id AS id,
+              CAST(f.starting_at AS STRING) AS date,
+              COALESCE(p.home_team, SPLIT(f.name, ' vs ')[SAFE_OFFSET(0)], 'Home') AS home_team,
+              COALESCE(p.away_team, SPLIT(f.name, ' vs ')[SAFE_OFFSET(1)], 'Away') AS away_team
+            FROM {self._table("fixtures")} f
+            LEFT JOIN participants p USING (fixture_id)
+            WHERE f.league_id = @competition_id
+              AND f.season_id = @season_id
+            ORDER BY f.starting_at DESC, f.fixture_id DESC
+            """,
+            [
+                bigquery.ScalarQueryParameter("competition_id", "INT64", competition_id),
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
+    def list_teams(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"""
+            SELECT DISTINCT team_id AS id, name, short_code, image_path
+            FROM {self._table("teams")}
+            WHERE season_id = @season_id
+              AND (@competition_id IS NULL OR league_id = @competition_id)
+            ORDER BY name
+            """,
+            [
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("competition_id", "INT64", competition_id),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
+    def list_players(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        rows = self._query(
+            f"""
+            SELECT DISTINCT
+              player_id AS id,
+              COALESCE(display_name, name, common_name) AS name,
+              position_id,
+              image_path
+            FROM {self._table("players")}
+            WHERE season_id = @season_id
+              AND (@competition_id IS NULL OR league_id = @competition_id)
+            ORDER BY name
+            """,
+            [
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("competition_id", "INT64", competition_id),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
     def get_game_view(self, fixture_id: int) -> dict[str, Any]:
         """Return everything the game screen needs using one BigQuery job."""
 
