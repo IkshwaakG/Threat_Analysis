@@ -4,3 +4,5 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 
 httpx>=0.27,<1
+
+google-cloud-bigquery>=3.25,<4
