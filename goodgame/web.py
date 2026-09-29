@@ -722,6 +722,24 @@ def season_players(
         raise _service_error(error) from error
 
 
+@app.get("/api/search")
+def global_search(
+    q: str = Query(min_length=2, max_length=80),
+    season_id: int | None = Query(default=None, gt=0),
+    competition_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=12, ge=1, le=20),
+) -> list[dict[str, Any]]:
+    try:
+        return _repository().search_entities(
+            query=q,
+            season_id=season_id,
+            league_id=competition_id,
+            limit=limit,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise _service_error(error) from error
+
+
 @app.get("/api/games/{fixture_id}")
 def game_view(fixture_id: int) -> dict[str, Any]:
     _positive(fixture_id, "fixture_id")
