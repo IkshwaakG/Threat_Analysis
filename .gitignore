@@ -1,0 +1,23 @@
+.env*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+coverage/
+htmlcov/
+
+# Local/cloud credentials
+credentials*.json
+service-account*.json
+*-credentials.json
+*.pem
+*.key
+*.p12
+
+# Generated deployment/demo artifacts
+demo_data/snapshot.json
+static/*
+!static/.gitkeep
