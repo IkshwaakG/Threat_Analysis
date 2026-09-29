@@ -1278,7 +1278,7 @@ class BigQueryServingRepository:
                     "save",
                     "clean sheet",
                 ),
-                12,
+                40,
             ),
             "teams": teams,
             "recent_fixtures": fixtures,
