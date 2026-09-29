@@ -12,9 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from goodgame.ingestion.factory import create_provider
 from goodgame.ingestion.sportmonks.client import SportmonksError
+from goodgame.pipeline import GoodGamePipeline
 
 
-app = FastAPI(title="GoodGame API", version="0.2.0")
+app = FastAPI(title="GoodGame API", version="0.3.0")
 
 _allowed_origins = [
     item.strip()
@@ -487,4 +488,94 @@ def match_visualization(match_id: int) -> dict[str, Any]:
         "ball_coordinates": _ball_coordinates(fixture),
         "color_source": colors["source"],
         "lineup_source": "sportmonks_fixture_lineups",
+    }
+
+
+
+def _team_payload(team: Any) -> dict[str, Any]:
+    return {
+        "id": team.id,
+        "name": team.name,
+        "slug": team.slug,
+    }
+
+
+def _match_payload(match: Any) -> dict[str, Any]:
+    return {
+        "id": match.id,
+        "home_team": _team_payload(match.home_team),
+        "away_team": _team_payload(match.away_team),
+        "home_score": match.home_score,
+        "away_score": match.away_score,
+        "status": match.status,
+        "start_timestamp": match.start_timestamp,
+        "competition_id": match.tournament_id,
+        "season_id": match.season_id,
+    }
+
+
+def _event_payload(event: Any) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "minute": event.minute,
+        "type": event.incident_type,
+        "text": event.text,
+        "is_home": event.is_home,
+        "player": event.player,
+        "player_in": event.player_in,
+        "player_out": event.player_out,
+        "home_score": event.home_score,
+        "away_score": event.away_score,
+        "class": event.incident_class,
+    }
+
+
+def _insight_payload(insight: Any) -> dict[str, Any]:
+    return {
+        "id": insight.id,
+        "kind": insight.kind,
+        "title": insight.title,
+        "impact": insight.impact,
+        "summary": insight.summary,
+        "start_minute": insight.start_minute,
+        "end_minute": insight.end_minute,
+        "evidence": list(insight.evidence),
+    }
+
+
+@app.get("/api/matches/{match_id}/analysis")
+def match_analysis(match_id: int) -> dict[str, Any]:
+    """Run the GoodGame analysis pipeline for one match.
+
+    This is the stable frontend-facing analysis endpoint. Provider-specific
+    payloads stay behind the ingestion layer while normalized match/events and
+    GoodGame insights are returned here.
+    """
+    provider = _provider()
+
+    try:
+        analysis = GoodGamePipeline(provider=provider).analyze_match(match_id)
+        fixture_statistics = (
+            provider.get_fixture_statistics(match_id)
+            if callable(getattr(provider, "get_fixture_statistics", None))
+            else []
+        )
+        fixture_xg = (
+            provider.get_fixture_xg(match_id)
+            if callable(getattr(provider, "get_fixture_xg", None))
+            else []
+        )
+    except (LookupError, ValueError, SportmonksError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    return {
+        "schema_version": "1",
+        "provider": "sportmonks",
+        "match": _match_payload(analysis.match),
+        "events": [_event_payload(event) for event in analysis.events],
+        "insights": [_insight_payload(insight) for insight in analysis.insights],
+        "lineups": analysis.lineups,
+        "shots": list(analysis.shots),
+        "statistics": fixture_statistics,
+        "xg": fixture_xg,
     }
