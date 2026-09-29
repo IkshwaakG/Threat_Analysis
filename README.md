@@ -245,3 +245,73 @@ Web / Quest
 ```
 
 The next major step is defining the GCP persistence model and normalized schemas, then building evidence-backed GoodGame analyzers on top.
+
+
+## Deployable GoodGame application
+
+The repositories stay separate:
+
+- football_xT_FE: frontend development
+- Threat_Analysis: deployable GoodGame backend/application
+- football_xT_ETL: independent Sportmonks-to-BigQuery ingestion
+
+The ETL repo is not packaged into the web application.
+
+Runtime flow:
+
+Browser -> "/" -> compiled React assets
+Browser -> "/api/*" -> FastAPI -> serving repository
+
+The serving repository is selected with DATA_MODE:
+
+- DATA_MODE=gcp -> BigQuery
+- DATA_MODE=demo -> demo_data/snapshot.json
+
+The frontend API contract is identical in both modes.
+
+### Local GCP mode
+
+Set DATA_MODE=gcp, GCP_PROJECT_ID=gg-football-data and BIGQUERY_CORE_DATASET=football_core, then run:
+
+uvicorn goodgame.web:app --reload --port 8000
+
+The frontend dev server can still run separately and proxy /api to port 8000.
+
+### Build one deployable application
+
+With football_xT_FE and Threat_Analysis checked out next to each other, run from Threat_Analysis:
+
+bash scripts/package_frontend.sh ../football_xT_FE
+
+This builds football_xT_FE/apps/web/dist and copies only the compiled files into Threat_Analysis/static.
+
+Then run:
+
+DATA_MODE=gcp uvicorn goodgame.web:app --host 0.0.0.0 --port 8000
+
+Opening http://localhost:8000/ loads the website. The JSON APIs are served under /api on the same origin.
+
+### Demo mode
+
+Create a packaged snapshot from normalized GCP data using:
+
+python scripts/export_demo_snapshot.py --competition-id <league_id> --season-id <season_id> --fixture-id <fixture_id> --team-id <team_id> --player-id <player_id>
+
+Then run:
+
+DATA_MODE=demo uvicorn goodgame.web:app --host 0.0.0.0 --port 8000
+
+Demo mode does not query BigQuery at request time.
+
+### Docker / Cloud Run style deployment
+
+After packaging the frontend:
+
+docker build -t goodgame .
+docker run --rm -p 8080:8080 -e DATA_MODE=demo goodgame
+
+Health check: GET /api/health
+
+For GCP-backed deployment use DATA_MODE=gcp and give the runtime service account BigQuery read permissions.
+
+The runtime image contains Python backend code, compiled frontend assets, and optional demo snapshot data. It does not contain frontend source, node_modules, Vite dev tooling, or the ETL/Sportmonks ingestion repo.
