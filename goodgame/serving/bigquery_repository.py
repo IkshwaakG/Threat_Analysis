@@ -537,6 +537,93 @@ class BigQueryServingRepository:
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
+            raw_fixture AS (
+              SELECT payload
+              FROM {self._raw_table("api_responses")}
+              WHERE provider = 'sportmonks'
+                AND entity_type = 'fixture'
+                AND SAFE_CAST(JSON_VALUE(payload, '$.id') AS INT64) = @fixture_id
+              ORDER BY fetched_at DESC
+              LIMIT 1
+            ),
+            raw_facts AS (
+              SELECT
+                JSON_VALUE(payload, '$.state.name') AS state_name,
+                JSON_VALUE(payload, '$.stage.name') AS stage_name,
+                JSON_VALUE(payload, '$.round.name') AS round_name,
+                JSON_VALUE(payload, '$.league.name') AS league_name,
+                SAFE_CAST(JSON_VALUE(payload, '$.length') AS INT64) AS match_length,
+                JSON_VALUE(payload, '$.leg') AS leg,
+                (
+                  SELECT SAFE_CAST(
+                    COALESCE(
+                      JSON_VALUE(metadata, '$.value'),
+                      JSON_VALUE(metadata, '$.values.total'),
+                      JSON_VALUE(metadata, '$.data.value')
+                    ) AS INT64
+                  )
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.metadata'), [])) AS metadata
+                  WHERE LOWER(COALESCE(
+                    JSON_VALUE(metadata, '$.name'),
+                    JSON_VALUE(metadata, '$.key'),
+                    JSON_VALUE(metadata, '$.type.name'),
+                    JSON_VALUE(metadata, '$.type.developer_name'),
+                    ''
+                  )) LIKE '%attendance%'
+                  LIMIT 1
+                ) AS attendance,
+                (
+                  SELECT COALESCE(
+                    JSON_VALUE(ref, '$.referee.display_name'),
+                    JSON_VALUE(ref, '$.referee.name'),
+                    JSON_VALUE(ref, '$.display_name'),
+                    JSON_VALUE(ref, '$.name')
+                  )
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
+                  LIMIT 1
+                ) AS referee_name,
+                (
+                  SELECT SAFE_CAST(COALESCE(
+                    JSON_VALUE(ref, '$.referee.id'),
+                    JSON_VALUE(ref, '$.referee_id'),
+                    JSON_VALUE(ref, '$.id')
+                  ) AS INT64)
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
+                  LIMIT 1
+                ) AS referee_id,
+                (
+                  SELECT COALESCE(
+                    JSON_VALUE(ref, '$.referee.image_path'),
+                    JSON_VALUE(ref, '$.image_path')
+                  )
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
+                  LIMIT 1
+                ) AS referee_image,
+                (
+                  SELECT COALESCE(
+                    JSON_VALUE(ref, '$.referee.country.name'),
+                    JSON_VALUE(ref, '$.country.name')
+                  )
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
+                  LIMIT 1
+                ) AS referee_country
+              FROM raw_fixture
+            ),
+            raw_standings AS (
+              SELECT payload
+              FROM {self._raw_table("api_responses")} r
+              CROSS JOIN fixture f
+              WHERE r.provider = 'sportmonks'
+                AND r.entity_type = 'standing'
+                AND SAFE_CAST(JSON_VALUE(r.payload, '$._etl_season_id') AS INT64) = f.season_id
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(
+                  JSON_VALUE(r.payload, '$.participant_id'),
+                  JSON_VALUE(r.payload, '$.participant.id')
+                )
+                ORDER BY r.fetched_at DESC
+              ) = 1
+            ),
             participants AS (
               SELECT
                 fp.fixture_id,
@@ -591,6 +678,7 @@ class BigQueryServingRepository:
                 s.player_id,
                 s.entity_type,
                 s.entity_id,
+                s.period_id,
                 s.type_id,
                 s.value,
                 ty.name,
@@ -600,6 +688,11 @@ class BigQueryServingRepository:
               FROM {self._table("statistics")} s
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE s.fixture_id = @fixture_id
+                AND (
+                  (s.player_id IS NOT NULL AND s.entity_type = 'player')
+                  OR (s.player_id IS NULL AND s.team_id IS NOT NULL AND s.entity_type = 'fixture')
+                  OR (s.player_id IS NULL AND s.team_id IS NULL AND s.entity_type = 'fixture')
+                )
             ),
             goals AS (
               SELECT e.team_id, COUNT(*) AS goals
@@ -727,6 +820,11 @@ class BigQueryServingRepository:
                 CAST(f.starting_at AS STRING) AS starting_at,
                 f.starting_at_timestamp,
                 f.state_id,
+                f.stage_id,
+                f.round_id,
+                f.venue_id,
+                f.leg,
+                f.length,
                 f.result_info,
                 l.name AS competition_name
               )) AS payload
@@ -896,6 +994,48 @@ class BigQueryServingRepository:
                 s.games_missed
               )) AS payload
             FROM sidelined s
+
+            UNION ALL
+
+            SELECT
+              'raw_fact' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                rf.state_name,
+                rf.stage_name,
+                rf.round_name,
+                rf.league_name,
+                rf.match_length,
+                rf.leg,
+                rf.attendance,
+                rf.referee_id,
+                rf.referee_name,
+                rf.referee_image,
+                rf.referee_country
+              )) AS payload
+            FROM raw_facts rf
+
+            UNION ALL
+
+            SELECT
+              'standing' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                SAFE_CAST(COALESCE(
+                  JSON_VALUE(payload, '$.participant_id'),
+                  JSON_VALUE(payload, '$.participant.id')
+                ) AS INT64) AS team_id,
+                COALESCE(
+                  JSON_VALUE(payload, '$.participant.name'),
+                  JSON_VALUE(payload, '$.team.name')
+                ) AS team_name,
+                COALESCE(
+                  JSON_VALUE(payload, '$.participant.image_path'),
+                  JSON_VALUE(payload, '$.team.image_path')
+                ) AS team_logo,
+                SAFE_CAST(JSON_VALUE(payload, '$.position') AS INT64) AS position,
+                SAFE_CAST(JSON_VALUE(payload, '$.points') AS INT64) AS points,
+                JSON_QUERY(payload, '$.details') AS details
+              )) AS payload
+            FROM raw_standings
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )
@@ -912,6 +1052,8 @@ class BigQueryServingRepository:
         venue: dict[str, Any] | None = None
         weather: dict[str, Any] | None = None
         sidelined: list[dict[str, Any]] = []
+        raw_fact: dict[str, Any] = {}
+        standings: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -981,6 +1123,10 @@ class BigQueryServingRepository:
                 weather = data
             elif kind == "sidelined":
                 sidelined.append(data)
+            elif kind == "raw_fact":
+                raw_fact = data
+            elif kind == "standing":
+                standings.append(data)
 
         if fixture is None:
             raise LookupError(f"Fixture {fixture_id} not found in BigQuery")
@@ -1097,6 +1243,8 @@ class BigQueryServingRepository:
             "venue": venue,
             "weather": weather,
             "sidelined": sidelined,
+            "raw_fact": raw_fact,
+            "standings": standings,
             "source": "bigquery",
         }
 
