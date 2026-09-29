@@ -107,7 +107,8 @@ def _lineup_details(lineup: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             or f"type_{type_id}" if type_id is not None else "stat"
         )
         label = str(label).strip().casefold().replace(" ", "_").replace("-", "_")
-        value = _scalar(detail.get("value"))
+        raw_value = detail.get("data") if "data" in detail else detail.get("value")
+        value = _scalar(raw_value)
 
         if type_id == 40 or label in {"captain", "captain_status"}:
             captain = captain or _truthy(value)
