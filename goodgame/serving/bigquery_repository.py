@@ -581,12 +581,30 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_teams(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        """List only teams that actually participate in fixtures for this scope."""
         rows = self._query(
             f"""
-            SELECT DISTINCT team_id AS id, name, short_code, image_path
-            FROM {self._table("teams")}
-            WHERE season_id = @season_id
-              AND (@competition_id IS NULL OR league_id = @competition_id)
+            WITH scoped_teams AS (
+              SELECT DISTINCT fp.team_id
+              FROM {self._table("fixture_participants")} fp
+              JOIN {self._table("fixtures")} f USING (fixture_id)
+              WHERE f.season_id = @season_id
+                AND (@competition_id IS NULL OR f.league_id = @competition_id)
+            )
+            SELECT
+              t.team_id AS id,
+              t.name,
+              t.short_code,
+              t.image_path
+            FROM scoped_teams st
+            JOIN {self._table("teams")} t
+              ON t.team_id = st.team_id
+             AND t.season_id = @season_id
+             AND (@competition_id IS NULL OR t.league_id = @competition_id)
+            QUALIFY ROW_NUMBER() OVER (
+              PARTITION BY t.team_id
+              ORDER BY t.updated_at DESC
+            ) = 1
             ORDER BY name
             """,
             [
@@ -597,16 +615,30 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_players(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        """List only players present in fixture lineups for this scope."""
         rows = self._query(
             f"""
-            SELECT DISTINCT
-              player_id AS id,
-              COALESCE(display_name, name, common_name) AS name,
-              position_id,
-              image_path
-            FROM {self._table("players")}
-            WHERE season_id = @season_id
-              AND (@competition_id IS NULL OR league_id = @competition_id)
+            WITH scoped_players AS (
+              SELECT DISTINCT fl.player_id
+              FROM {self._table("fixture_lineups")} fl
+              JOIN {self._table("fixtures")} f USING (fixture_id)
+              WHERE f.season_id = @season_id
+                AND (@competition_id IS NULL OR f.league_id = @competition_id)
+            )
+            SELECT
+              p.player_id AS id,
+              COALESCE(p.display_name, p.name, p.common_name) AS name,
+              p.position_id,
+              p.image_path
+            FROM scoped_players sp
+            JOIN {self._table("players")} p
+              ON p.player_id = sp.player_id
+             AND p.season_id = @season_id
+             AND (@competition_id IS NULL OR p.league_id = @competition_id)
+            QUALIFY ROW_NUMBER() OVER (
+              PARTITION BY p.player_id
+              ORDER BY p.updated_at DESC
+            ) = 1
             ORDER BY name
             """,
             [
