@@ -55,6 +55,60 @@ class DemoServingRepository:
             and (competition_id is None or int(row.get("competition_id", -1)) == competition_id)
         ]
 
+    def search_entities(
+        self,
+        query: str,
+        season_id: int | None = None,
+        league_id: int | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        normalized = query.strip().casefold()
+        if len(normalized) < 2:
+            return []
+
+        results: list[dict[str, Any]] = []
+        for row in self.data.get("teams", []):
+            name = str(row.get("name") or "")
+            if normalized in name.casefold() and (
+                season_id is None or int(row.get("season_id", -1)) == season_id
+            ) and (
+                league_id is None or int(row.get("competition_id", -1)) == league_id
+            ):
+                results.append({
+                    "entity_type": "team",
+                    "id": row.get("id"),
+                    "name": name,
+                    "subtitle": row.get("short_code"),
+                    "image": row.get("image_path"),
+                    "league_id": row.get("competition_id"),
+                    "season_id": row.get("season_id"),
+                })
+
+        for row in self.data.get("players", []):
+            name = str(row.get("name") or "")
+            if normalized in name.casefold() and (
+                season_id is None or int(row.get("season_id", -1)) == season_id
+            ) and (
+                league_id is None or int(row.get("competition_id", -1)) == league_id
+            ):
+                results.append({
+                    "entity_type": "player",
+                    "id": row.get("id"),
+                    "name": name,
+                    "subtitle": str(row.get("position_id") or ""),
+                    "image": row.get("image_path"),
+                    "league_id": row.get("competition_id"),
+                    "season_id": row.get("season_id"),
+                })
+
+        results.sort(
+            key=lambda row: (
+                0 if str(row.get("name") or "").casefold() == normalized else 1,
+                str(row.get("name") or "").casefold(),
+            )
+        )
+        return results[: max(1, min(limit, 20))]
+
     def get_game_view(self, fixture_id: int) -> dict[str, Any]:
         value = self.data.get("game_views", {}).get(str(fixture_id))
         if value is None:

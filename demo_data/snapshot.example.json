@@ -1,10 +1,507 @@
 {
-  "competitions": [],
-  "seasons": [],
-  "matches": [],
-  "teams": [],
-  "players": [],
-  "game_views": {},
-  "team_views": {},
-  "player_views": {}
+  "competitions": [
+    {
+      "id": 999001,
+      "name": "GoodGame Demo League"
+    }
+  ],
+  "seasons": [
+    {
+      "id": 999101,
+      "name": "Demo Season",
+      "competition_id": 999001
+    }
+  ],
+  "matches": [
+    {
+      "id": 999201,
+      "date": "2026-01-15T20:00:00",
+      "home_team": "Demo United",
+      "away_team": "Sample City",
+      "home_score": 2,
+      "away_score": 1,
+      "competition_id": 999001,
+      "season_id": 999101
+    }
+  ],
+  "teams": [
+    {
+      "id": 999301,
+      "name": "Demo United",
+      "short_code": "DMU",
+      "image_path": null,
+      "competition_id": 999001,
+      "season_id": 999101
+    },
+    {
+      "id": 999302,
+      "name": "Sample City",
+      "short_code": "SAM",
+      "image_path": null,
+      "competition_id": 999001,
+      "season_id": 999101
+    }
+  ],
+  "players": [
+    {
+      "id": 999401,
+      "name": "Alex Demo",
+      "position_id": 26,
+      "image_path": null,
+      "competition_id": 999001,
+      "season_id": 999101
+    },
+    {
+      "id": 999402,
+      "name": "Jamie Sample",
+      "position_id": 27,
+      "image_path": null,
+      "competition_id": 999001,
+      "season_id": 999101
+    }
+  ],
+  "game_views": {
+    "999201": {
+      "fixture": {
+        "id": 999201,
+        "competition_id": 999001,
+        "season_id": 999101,
+        "name": "Demo United vs Sample City",
+        "starting_at": "2026-01-15T20:00:00",
+        "result_info": "FT",
+        "competition_name": "GoodGame Demo League"
+      },
+      "home_team": {
+        "id": 999301,
+        "location": "home",
+        "name": "Demo United",
+        "short_code": "DMU",
+        "logo": null,
+        "goals": 2,
+        "profile_url": "/teams/999301",
+        "stats": [
+          {
+            "type_id": 1,
+            "name": "Possession",
+            "developer_name": "ball_possession",
+            "value": 56
+          },
+          {
+            "type_id": 2,
+            "name": "Shots On Target",
+            "developer_name": "shots_on_target",
+            "value": 6
+          }
+        ]
+      },
+      "away_team": {
+        "id": 999302,
+        "location": "away",
+        "name": "Sample City",
+        "short_code": "SAM",
+        "logo": null,
+        "goals": 1,
+        "profile_url": "/teams/999302",
+        "stats": [
+          {
+            "type_id": 1,
+            "name": "Possession",
+            "developer_name": "ball_possession",
+            "value": 44
+          },
+          {
+            "type_id": 2,
+            "name": "Shots On Target",
+            "developer_name": "shots_on_target",
+            "value": 3
+          }
+        ]
+      },
+      "game_stats": [
+        {
+          "type_id": 3,
+          "name": "Attendance",
+          "developer_name": "attendance",
+          "value": 25000
+        }
+      ],
+      "players": [
+        {
+          "player_id": 999401,
+          "name": "Alex Demo",
+          "team_id": 999301,
+          "team_name": "Demo United",
+          "team_location": "home",
+          "jersey_number": 8,
+          "position_id": 26,
+          "lineup_type_id": 11,
+          "formation_field": "2:2",
+          "formation_position": 5,
+          "profile_url": "/players/999401",
+          "match_stats": [
+            {
+              "type_id": 10,
+              "name": "Rating",
+              "developer_name": "rating",
+              "value": 8.1
+            },
+            {
+              "type_id": 11,
+              "name": "Assists",
+              "developer_name": "assists",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "player_id": 999402,
+          "name": "Jamie Sample",
+          "team_id": 999302,
+          "team_name": "Sample City",
+          "team_location": "away",
+          "jersey_number": 9,
+          "position_id": 27,
+          "lineup_type_id": 11,
+          "formation_field": "4:1",
+          "formation_position": 10,
+          "profile_url": "/players/999402",
+          "match_stats": [
+            {
+              "type_id": 10,
+              "name": "Rating",
+              "developer_name": "rating",
+              "value": 7.3
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 1,
+          "minute": 22,
+          "type": "goal",
+          "text": "Goal",
+          "team_id": 999301,
+          "player_id": 999401,
+          "is_home": true,
+          "player": "Alex Demo",
+          "home_score": 1,
+          "away_score": 0
+        },
+        {
+          "id": 2,
+          "minute": 61,
+          "type": "goal",
+          "text": "Goal",
+          "team_id": 999302,
+          "player_id": 999402,
+          "is_home": false,
+          "player": "Jamie Sample",
+          "home_score": 1,
+          "away_score": 1
+        }
+      ],
+      "timeline": [],
+      "selectable_events": [],
+      "spatial_flow": [],
+      "scores": [
+        {
+          "id": 1,
+          "type_id": 1,
+          "team_id": 999301,
+          "goals": 2,
+          "participant": "home",
+          "description": "CURRENT"
+        },
+        {
+          "id": 2,
+          "type_id": 1,
+          "team_id": 999302,
+          "goals": 1,
+          "participant": "away",
+          "description": "CURRENT"
+        }
+      ],
+      "venue": {
+        "id": 999501,
+        "name": "Demo Arena",
+        "city_name": "Demo City",
+        "capacity": 30000
+      },
+      "weather": {
+        "temperature_current": 18,
+        "description": "Clear",
+        "metric": "celsius"
+      },
+      "sidelined": [],
+      "raw_fact": {
+        "state_name": "Finished",
+        "stage_name": "Regular Season",
+        "round_name": "1",
+        "league_name": "GoodGame Demo League",
+        "match_length": 90,
+        "attendance": 25000,
+        "referee_name": "Demo Referee"
+      },
+      "standings": [
+        {
+          "team_id": 999301,
+          "team_name": "Demo United",
+          "position": 1,
+          "points": 10
+        },
+        {
+          "team_id": 999302,
+          "team_name": "Sample City",
+          "position": 2,
+          "points": 8
+        }
+      ],
+      "source": "demo"
+    }
+  },
+  "team_views": {
+    "999301:999101:999001": {
+      "team": {
+        "id": 999301,
+        "name": "Demo United",
+        "short_code": "DMU",
+        "logo": null,
+        "competition_id": 999001,
+        "season_id": 999101,
+        "profile_url": "/teams/999301"
+      },
+      "summary": {
+        "matches_played": 4,
+        "wins": 3,
+        "draws": 1,
+        "losses": 0,
+        "points": 10
+      },
+      "stats": [
+        {
+          "name": "Points",
+          "developer_name": "points",
+          "value": 10
+        },
+        {
+          "name": "Wins",
+          "developer_name": "wins",
+          "value": 3
+        },
+        {
+          "name": "Goals",
+          "developer_name": "goals",
+          "value": 9
+        }
+      ],
+      "players": [
+        {
+          "player_id": 999401,
+          "name": "Alex Demo",
+          "position_id": 26,
+          "image": null,
+          "profile_url": "/players/999401"
+        }
+      ],
+      "recent_fixtures": [
+        {
+          "id": 999201,
+          "name": "Demo United vs Sample City",
+          "starting_at": "2026-01-15T20:00:00",
+          "competition_id": 999001,
+          "season_id": 999101,
+          "home_team_id": 999301,
+          "home_team": "Demo United",
+          "away_team_id": 999302,
+          "away_team": "Sample City",
+          "profile_url": "/games/999201"
+        }
+      ],
+      "source": "demo"
+    },
+    "999302:999101:999001": {
+      "team": {
+        "id": 999302,
+        "name": "Sample City",
+        "short_code": "SAM",
+        "logo": null,
+        "competition_id": 999001,
+        "season_id": 999101,
+        "profile_url": "/teams/999302"
+      },
+      "summary": {
+        "matches_played": 4,
+        "wins": 2,
+        "draws": 2,
+        "losses": 0,
+        "points": 8
+      },
+      "stats": [
+        {
+          "name": "Points",
+          "developer_name": "points",
+          "value": 8
+        },
+        {
+          "name": "Wins",
+          "developer_name": "wins",
+          "value": 2
+        },
+        {
+          "name": "Goals",
+          "developer_name": "goals",
+          "value": 7
+        }
+      ],
+      "players": [
+        {
+          "player_id": 999402,
+          "name": "Jamie Sample",
+          "position_id": 27,
+          "image": null,
+          "profile_url": "/players/999402"
+        }
+      ],
+      "recent_fixtures": [
+        {
+          "id": 999201,
+          "name": "Demo United vs Sample City",
+          "starting_at": "2026-01-15T20:00:00",
+          "competition_id": 999001,
+          "season_id": 999101,
+          "home_team_id": 999301,
+          "home_team": "Demo United",
+          "away_team_id": 999302,
+          "away_team": "Sample City",
+          "profile_url": "/games/999201"
+        }
+      ],
+      "source": "demo"
+    }
+  },
+  "player_views": {
+    "999401:999101:999001": {
+      "player": {
+        "id": 999401,
+        "name": "Alex Demo",
+        "image": null,
+        "position_id": 26,
+        "competition_id": 999001,
+        "season_id": 999101,
+        "profile_url": "/players/999401"
+      },
+      "summary": {
+        "appearances": 4,
+        "starts": 4
+      },
+      "stats": [
+        {
+          "name": "Appearances",
+          "developer_name": "appearances",
+          "value": 4
+        },
+        {
+          "name": "Goals",
+          "developer_name": "goals",
+          "value": 2
+        },
+        {
+          "name": "Assists",
+          "developer_name": "assists",
+          "value": 3
+        },
+        {
+          "name": "Rating",
+          "developer_name": "rating",
+          "value": 7.8
+        }
+      ],
+      "teams": [
+        {
+          "id": 999301,
+          "name": "Demo United",
+          "short_code": "DMU",
+          "logo": null,
+          "profile_url": "/teams/999301"
+        }
+      ],
+      "recent_fixtures": [
+        {
+          "id": 999201,
+          "name": "Demo United vs Sample City",
+          "starting_at": "2026-01-15T20:00:00",
+          "competition_id": 999001,
+          "season_id": 999101,
+          "home_team_id": 999301,
+          "home_team": "Demo United",
+          "away_team_id": 999302,
+          "away_team": "Sample City",
+          "profile_url": "/games/999201"
+        }
+      ],
+      "source": "demo"
+    },
+    "999402:999101:999001": {
+      "player": {
+        "id": 999402,
+        "name": "Jamie Sample",
+        "image": null,
+        "position_id": 27,
+        "competition_id": 999001,
+        "season_id": 999101,
+        "profile_url": "/players/999402"
+      },
+      "summary": {
+        "appearances": 4,
+        "starts": 4
+      },
+      "stats": [
+        {
+          "name": "Appearances",
+          "developer_name": "appearances",
+          "value": 4
+        },
+        {
+          "name": "Goals",
+          "developer_name": "goals",
+          "value": 3
+        },
+        {
+          "name": "Assists",
+          "developer_name": "assists",
+          "value": 1
+        },
+        {
+          "name": "Rating",
+          "developer_name": "rating",
+          "value": 7.4
+        }
+      ],
+      "teams": [
+        {
+          "id": 999302,
+          "name": "Sample City",
+          "short_code": "SAM",
+          "logo": null,
+          "profile_url": "/teams/999302"
+        }
+      ],
+      "recent_fixtures": [
+        {
+          "id": 999201,
+          "name": "Demo United vs Sample City",
+          "starting_at": "2026-01-15T20:00:00",
+          "competition_id": 999001,
+          "season_id": 999101,
+          "home_team_id": 999301,
+          "home_team": "Demo United",
+          "away_team_id": 999302,
+          "away_team": "Sample City",
+          "profile_url": "/games/999201"
+        }
+      ],
+      "source": "demo"
+    }
+  }
 }

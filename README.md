@@ -315,3 +315,81 @@ Health check: GET /api/health
 For GCP-backed deployment use DATA_MODE=gcp and give the runtime service account BigQuery read permissions.
 
 The runtime image contains Python backend code, compiled frontend assets, and optional demo snapshot data. It does not contain frontend source, node_modules, Vite dev tooling, or the ETL/Sportmonks ingestion repo.
+
+
+## Current V1 serving contract
+
+The frontend-serving path is database-only:
+
+```text
+football_xT_FE
+    ↓ /api/*
+Threat_Analysis
+    ↓
+football_core
+```
+
+The web service does not read `football_raw` and does not call Sportmonks.
+Raw provider payloads are ETL-only.
+
+### Cost rules
+
+Game/fixture screens use:
+
+```text
+GET /api/games/{fixture_id}
+```
+
+That response contains the fixture, teams, lineup players, fixture player/team
+statistics, facts, events, timeline, spatial/event data and profile links needed
+for the current screen. Player selection is frontend-local and must not trigger
+another API/BigQuery request.
+
+Team and Player profile pages each use one detailed endpoint:
+
+```text
+GET /api/teams/{team_id}?season_id=...&competition_id=...
+GET /api/players/{player_id}?season_id=...&competition_id=...
+```
+
+Global player/team search is explicit-submit only:
+
+```text
+GET /api/search?q=...&season_id=...&competition_id=...
+```
+
+The UI does not query on each search keystroke.
+
+### Core-only fixture facts
+
+Match facts that were previously read from raw provider JSON are now expected in
+normalized core tables:
+
+- `football_core.fixture_facts`
+- `football_core.standings`
+- `football_core.fixture_scores`
+- `football_core.fixture_timeline`
+- `football_core.venues`
+- `football_core.fixture_weather`
+- `football_core.fixture_sidelined`
+
+Run the ETL core transform after pulling these changes before testing GCP mode.
+
+### Demo verification
+
+The repository contains a fully functional sanitized example snapshot:
+
+```bash
+python scripts/verify_demo_snapshot.py \
+  --snapshot demo_data/snapshot.example.json
+```
+
+To run the application in demo mode using that example locally:
+
+```bash
+cp demo_data/snapshot.example.json demo_data/snapshot.json
+DATA_MODE=demo uvicorn goodgame.web:app --port 8000
+```
+
+A real demo snapshot can still be generated from GCP using
+`scripts/export_demo_snapshot.py`, then verified with the same command.

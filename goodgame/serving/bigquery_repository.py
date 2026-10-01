@@ -16,7 +16,6 @@ from google.cloud import bigquery
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "gg-football-data")
 CORE_DATASET = os.environ.get("BIGQUERY_CORE_DATASET", "football_core")
-RAW_DATASET = os.environ.get("BIGQUERY_RAW_DATASET", "football_raw")
 BQ_LOCATION = os.environ.get("BIGQUERY_LOCATION", "US")
 BQ_MAX_BYTES_BILLED = int(
     os.environ.get("GOODGAME_BIGQUERY_MAX_BYTES_BILLED", "1000000000")
@@ -486,9 +485,6 @@ class BigQueryServingRepository:
     def _table(self, name: str) -> str:
         return f"`{self.project_id}.{self.dataset}.{name}`"
 
-    def _raw_table(self, name: str) -> str:
-        return f"`{self.project_id}.{RAW_DATASET}.{name}`"
-
     def _query(
         self,
         sql: str,
@@ -620,6 +616,101 @@ class BigQueryServingRepository:
         )
         return [dict(row.items()) for row in rows]
 
+    def search_entities(
+        self,
+        query: str,
+        season_id: int | None = None,
+        league_id: int | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Search players and teams with one bounded BigQuery job."""
+
+        normalized = query.strip().casefold()
+        if len(normalized) < 2:
+            return []
+
+        rows = self._query(
+            f"""
+            WITH team_candidates AS (
+              SELECT
+                'team' AS entity_type,
+                team_id AS id,
+                name,
+                short_code AS subtitle,
+                image_path AS image,
+                league_id,
+                season_id,
+                updated_at,
+                CASE
+                  WHEN LOWER(name) = @query THEN 0
+                  WHEN STARTS_WITH(LOWER(name), @query) THEN 1
+                  ELSE 2
+                END AS rank
+              FROM {self._table("teams")}
+              WHERE LOWER(name) LIKE CONCAT('%', @query, '%')
+                AND (@season_id IS NULL OR season_id = @season_id)
+                AND (@league_id IS NULL OR league_id = @league_id)
+            ),
+            team_matches AS (
+              SELECT * EXCEPT(updated_at)
+              FROM team_candidates
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY id
+                ORDER BY rank, updated_at DESC
+              ) = 1
+            ),
+            player_candidates AS (
+              SELECT
+                'player' AS entity_type,
+                player_id AS id,
+                COALESCE(display_name, name, common_name) AS name,
+                CASE position_id
+                  WHEN 24 THEN 'Goalkeeper'
+                  WHEN 25 THEN 'Defender'
+                  WHEN 26 THEN 'Midfielder'
+                  WHEN 27 THEN 'Attacker'
+                  ELSE 'Player'
+                END AS subtitle,
+                image_path AS image,
+                league_id,
+                season_id,
+                updated_at,
+                CASE
+                  WHEN LOWER(COALESCE(display_name, name, common_name)) = @query THEN 0
+                  WHEN STARTS_WITH(LOWER(COALESCE(display_name, name, common_name)), @query) THEN 1
+                  ELSE 2
+                END AS rank
+              FROM {self._table("players")}
+              WHERE LOWER(COALESCE(display_name, name, common_name)) LIKE CONCAT('%', @query, '%')
+                AND (@season_id IS NULL OR season_id = @season_id)
+                AND (@league_id IS NULL OR league_id = @league_id)
+            ),
+            player_matches AS (
+              SELECT * EXCEPT(updated_at)
+              FROM player_candidates
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY id
+                ORDER BY rank, updated_at DESC
+              ) = 1
+            )
+            SELECT entity_type, id, name, subtitle, image, league_id, season_id
+            FROM (
+              SELECT * FROM team_matches
+              UNION ALL
+              SELECT * FROM player_matches
+            )
+            ORDER BY rank, name
+            LIMIT @limit
+            """,
+            [
+                bigquery.ScalarQueryParameter("query", "STRING", normalized),
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("league_id", "INT64", league_id),
+                bigquery.ScalarQueryParameter("limit", "INT64", max(1, min(limit, 20))),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
     def get_game_view(self, fixture_id: int) -> dict[str, Any]:
         """Return everything the game screen needs using one BigQuery job."""
 
@@ -631,92 +722,28 @@ class BigQueryServingRepository:
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
-            raw_fixture AS (
-              SELECT payload
-              FROM {self._raw_table("api_responses")}
-              WHERE provider = 'sportmonks'
-                AND entity_type = 'fixture'
-                AND SAFE_CAST(JSON_VALUE(payload, '$.id') AS INT64) = @fixture_id
-              ORDER BY fetched_at DESC
+            fixture_facts AS (
+              SELECT *
+              FROM {self._table("fixture_facts")}
+              WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
-            raw_facts AS (
+            season_standings AS (
               SELECT
-                JSON_VALUE(payload, '$.state.name') AS state_name,
-                JSON_VALUE(payload, '$.stage.name') AS stage_name,
-                JSON_VALUE(payload, '$.round.name') AS round_name,
-                JSON_VALUE(payload, '$.league.name') AS league_name,
-                SAFE_CAST(JSON_VALUE(payload, '$.length') AS INT64) AS match_length,
-                JSON_VALUE(payload, '$.leg') AS leg,
-                (
-                  SELECT SAFE_CAST(
-                    COALESCE(
-                      JSON_VALUE(metadata, '$.value'),
-                      JSON_VALUE(metadata, '$.values.total'),
-                      JSON_VALUE(metadata, '$.data.value')
-                    ) AS INT64
-                  )
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.metadata'), [])) AS metadata
-                  WHERE LOWER(COALESCE(
-                    JSON_VALUE(metadata, '$.name'),
-                    JSON_VALUE(metadata, '$.key'),
-                    JSON_VALUE(metadata, '$.type.name'),
-                    JSON_VALUE(metadata, '$.type.developer_name'),
-                    ''
-                  )) LIKE '%attendance%'
-                  LIMIT 1
-                ) AS attendance,
-                (
-                  SELECT COALESCE(
-                    JSON_VALUE(ref, '$.referee.display_name'),
-                    JSON_VALUE(ref, '$.referee.name'),
-                    JSON_VALUE(ref, '$.display_name'),
-                    JSON_VALUE(ref, '$.name')
-                  )
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
-                  LIMIT 1
-                ) AS referee_name,
-                (
-                  SELECT SAFE_CAST(COALESCE(
-                    JSON_VALUE(ref, '$.referee.id'),
-                    JSON_VALUE(ref, '$.referee_id'),
-                    JSON_VALUE(ref, '$.id')
-                  ) AS INT64)
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
-                  LIMIT 1
-                ) AS referee_id,
-                (
-                  SELECT COALESCE(
-                    JSON_VALUE(ref, '$.referee.image_path'),
-                    JSON_VALUE(ref, '$.image_path')
-                  )
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
-                  LIMIT 1
-                ) AS referee_image,
-                (
-                  SELECT COALESCE(
-                    JSON_VALUE(ref, '$.referee.country.name'),
-                    JSON_VALUE(ref, '$.country.name')
-                  )
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(payload, '$.referees'), [])) AS ref
-                  LIMIT 1
-                ) AS referee_country
-              FROM raw_fixture
-            ),
-            raw_standings AS (
-              SELECT payload
-              FROM {self._raw_table("api_responses")} r
+                s.team_id,
+                t.name AS team_name,
+                t.image_path AS team_logo,
+                s.position,
+                s.points,
+                s.details
+              FROM {self._table("standings")} s
               CROSS JOIN fixture f
-              WHERE r.provider = 'sportmonks'
-                AND r.entity_type = 'standing'
-                AND SAFE_CAST(JSON_VALUE(r.payload, '$._etl_season_id') AS INT64) = f.season_id
-              QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY COALESCE(
-                  JSON_VALUE(r.payload, '$.participant_id'),
-                  JSON_VALUE(r.payload, '$.participant.id')
-                )
-                ORDER BY r.fetched_at DESC
-              ) = 1
+              LEFT JOIN {self._table("teams")} t
+                ON t.team_id = s.team_id
+               AND t.league_id = s.league_id
+               AND t.season_id = s.season_id
+              WHERE s.league_id = f.league_id
+                AND s.season_id = f.season_id
             ),
             participants AS (
               SELECT
@@ -816,7 +843,7 @@ class BigQueryServingRepository:
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE e.fixture_id = @fixture_id
             ),
-            normalized_timeline AS (
+            timeline AS (
               SELECT
                 t.timeline_id,
                 t.minute,
@@ -835,39 +862,6 @@ class BigQueryServingRepository:
               FROM {self._table("fixture_timeline")} t
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE t.fixture_id = @fixture_id
-            ),
-            raw_timeline AS (
-              SELECT
-                SAFE_CAST(JSON_VALUE(item, '$.id') AS INT64) AS timeline_id,
-                SAFE_CAST(JSON_VALUE(item, '$.minute') AS INT64) AS minute,
-                SAFE_CAST(JSON_VALUE(item, '$.extra_minute') AS INT64) AS extra_minute,
-                SAFE_CAST(JSON_VALUE(item, '$.type_id') AS INT64) AS type_id,
-                SAFE_CAST(JSON_VALUE(item, '$.participant_id') AS INT64) AS team_id,
-                SAFE_CAST(JSON_VALUE(item, '$.player_id') AS INT64) AS player_id,
-                SAFE_CAST(JSON_VALUE(item, '$.related_player_id') AS INT64) AS related_player_id,
-                JSON_VALUE(item, '$.info') AS info,
-                JSON_VALUE(item, '$.addition') AS addition,
-                JSON_VALUE(item, '$.result') AS result,
-                SAFE_CAST(JSON_VALUE(item, '$.sort_order') AS INT64) AS sort_order,
-                item AS raw_timeline,
-                CAST(NULL AS STRING) AS type_name,
-                CAST(NULL AS STRING) AS type_developer_name
-              FROM (
-                SELECT payload
-                FROM {self._raw_table("api_responses")}
-                WHERE provider = 'sportmonks'
-                  AND entity_type = 'fixture'
-                  AND SAFE_CAST(JSON_VALUE(payload, '$.id') AS INT64) = @fixture_id
-                ORDER BY fetched_at DESC
-                LIMIT 1
-              ) raw,
-              UNNEST(IFNULL(JSON_QUERY_ARRAY(raw.payload, '$.timeline'), [])) AS item
-            ),
-            timeline AS (
-              SELECT * FROM normalized_timeline
-              UNION ALL
-              SELECT * FROM raw_timeline
-              WHERE NOT EXISTS (SELECT 1 FROM normalized_timeline)
             ),
             scores AS (
               SELECT score_id, type_id, team_id, goals, participant, description
@@ -1106,30 +1100,21 @@ class BigQueryServingRepository:
                 rf.referee_image,
                 rf.referee_country
               )) AS payload
-            FROM raw_facts rf
+            FROM fixture_facts rf
 
             UNION ALL
 
             SELECT
               'standing' AS row_kind,
               TO_JSON_STRING(STRUCT(
-                SAFE_CAST(COALESCE(
-                  JSON_VALUE(payload, '$.participant_id'),
-                  JSON_VALUE(payload, '$.participant.id')
-                ) AS INT64) AS team_id,
-                COALESCE(
-                  JSON_VALUE(payload, '$.participant.name'),
-                  JSON_VALUE(payload, '$.team.name')
-                ) AS team_name,
-                COALESCE(
-                  JSON_VALUE(payload, '$.participant.image_path'),
-                  JSON_VALUE(payload, '$.team.image_path')
-                ) AS team_logo,
-                SAFE_CAST(JSON_VALUE(payload, '$.position') AS INT64) AS position,
-                SAFE_CAST(JSON_VALUE(payload, '$.points') AS INT64) AS points,
-                JSON_QUERY(payload, '$.details') AS details
+                s.team_id,
+                s.team_name,
+                s.team_logo,
+                s.position,
+                s.points,
+                s.details
               )) AS payload
-            FROM raw_standings
+            FROM season_standings s
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )

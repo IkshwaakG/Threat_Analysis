@@ -29,6 +29,19 @@ class FakeServingRepository:
     def list_players(self, season_id, competition_id=None):
         return [{"id": 10, "name": "Bruno Fernandes"}]
 
+    def search_entities(self, query, season_id=None, league_id=None, limit=12):
+        return [
+            {
+                "entity_type": "player",
+                "id": 10,
+                "name": "Bruno Fernandes",
+                "subtitle": "26",
+                "image": None,
+                "league_id": league_id or 8,
+                "season_id": season_id or 318,
+            }
+        ]
+
     def get_game_view(self, fixture_id):
         return {
             "fixture": {
@@ -93,6 +106,21 @@ class FakeServingRepository:
 class GoodGameWebTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def test_search_endpoint_uses_serving_repository(self):
+        with patch("goodgame.web._repository", return_value=FakeServingRepository()):
+            response = self.client.get(
+                "/api/search?q=Bruno&season_id=318&competition_id=8"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body[0]["entity_type"], "player")
+        self.assertEqual(body[0]["name"], "Bruno Fernandes")
+
+    def test_search_rejects_one_character_queries(self):
+        response = self.client.get("/api/search?q=B")
+        self.assertEqual(response.status_code, 422)
 
     def test_game_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
