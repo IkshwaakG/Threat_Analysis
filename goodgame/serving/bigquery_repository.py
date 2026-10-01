@@ -164,6 +164,50 @@ def _coordinate_pair(value: Any) -> tuple[float, float] | None:
     )
 
 
+def _ball_coordinate_points(value: Any) -> list[dict[str, Any]]:
+    """Extract pitch-ready x/y points from stored provider ball-coordinate JSON."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+
+    points: list[dict[str, Any]] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, list):
+            for current in item:
+                visit(current)
+            return
+        if not isinstance(item, dict):
+            return
+
+        pair = _coordinate_pair(item)
+        if pair is None:
+            for key in ("coordinates", "location", "position", "point"):
+                pair = _coordinate_pair(item.get(key))
+                if pair is not None:
+                    break
+
+        if pair is not None:
+            points.append(
+                {
+                    "x": pair[0],
+                    "y": pair[1],
+                    "timer": item.get("timer") or item.get("minute") or item.get("time"),
+                    "period_id": item.get("period_id") or item.get("period"),
+                }
+            )
+            return
+
+        for nested in item.values():
+            if isinstance(nested, (list, dict)):
+                visit(nested)
+
+    visit(value)
+    return points
+
+
 def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict[str, Any] | None:
     if isinstance(raw, str):
         try:
@@ -760,6 +804,12 @@ class BigQueryServingRepository:
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
+            fixture_advanced AS (
+              SELECT *
+              FROM {self._table("fixture_advanced")}
+              WHERE fixture_id = @fixture_id
+              LIMIT 1
+            ),
             season_standings AS (
               SELECT
                 s.team_id,
@@ -1137,6 +1187,19 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'advanced' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                a.ball_coordinates,
+                a.pressure,
+                a.xg_fixture,
+                a.trends,
+                a.expected_lineups
+              )) AS payload
+            FROM fixture_advanced a
+
+            UNION ALL
+
+            SELECT
               'standing' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 s.team_id,
@@ -1164,6 +1227,7 @@ class BigQueryServingRepository:
         weather: dict[str, Any] | None = None
         sidelined: list[dict[str, Any]] = []
         raw_fact: dict[str, Any] = {}
+        advanced: dict[str, Any] = {}
         standings: list[dict[str, Any]] = []
 
         for row in rows:
@@ -1236,6 +1300,8 @@ class BigQueryServingRepository:
                 sidelined.append(data)
             elif kind == "raw_fact":
                 raw_fact = data
+            elif kind == "advanced":
+                advanced = data
             elif kind == "standing":
                 standings.append(data)
 
@@ -1356,6 +1422,11 @@ class BigQueryServingRepository:
             "sidelined": sidelined,
             "raw_fact": raw_fact,
             "standings": standings,
+            "ball_coordinates": _ball_coordinate_points(advanced.get("ball_coordinates")),
+            "pressure": advanced.get("pressure"),
+            "xg_fixture": advanced.get("xg_fixture"),
+            "trends": advanced.get("trends"),
+            "expected_lineups": advanced.get("expected_lineups"),
             "source": "bigquery",
         }
 
