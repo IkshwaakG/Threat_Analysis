@@ -625,28 +625,31 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_teams(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
-        """List only teams that actually participate in fixtures for this scope."""
+        """List teams that participate in fixtures for this competition/season."""
         rows = self._query(
             f"""
             WITH scoped_teams AS (
-              SELECT DISTINCT fp.team_id
+              SELECT DISTINCT
+                fp.team_id,
+                f.league_id,
+                f.season_id
               FROM {self._table("fixture_participants")} fp
               JOIN {self._table("fixtures")} f USING (fixture_id)
               WHERE f.season_id = @season_id
                 AND (@competition_id IS NULL OR f.league_id = @competition_id)
             )
             SELECT
-              t.team_id AS id,
-              t.name,
+              st.team_id AS id,
+              COALESCE(t.name, CONCAT('Team ', CAST(st.team_id AS STRING))) AS name,
               t.short_code,
               t.image_path
             FROM scoped_teams st
-            JOIN {self._table("teams")} t
+            LEFT JOIN {self._table("teams")} t
               ON t.team_id = st.team_id
-             AND t.season_id = @season_id
-             AND (@competition_id IS NULL OR t.league_id = @competition_id)
+             AND t.league_id = st.league_id
+             AND t.season_id = st.season_id
             QUALIFY ROW_NUMBER() OVER (
-              PARTITION BY t.team_id
+              PARTITION BY st.team_id
               ORDER BY t.updated_at DESC
             ) = 1
             ORDER BY name
@@ -659,28 +662,39 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_players(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
-        """List only players present in fixture lineups for this scope."""
+        """List players present in fixture lineups for this competition/season."""
         rows = self._query(
             f"""
             WITH scoped_players AS (
-              SELECT DISTINCT fl.player_id
+              SELECT
+                fl.player_id,
+                ANY_VALUE(fl.player_name HAVING MAX fl.updated_at) AS lineup_name,
+                f.league_id,
+                f.season_id
               FROM {self._table("fixture_lineups")} fl
               JOIN {self._table("fixtures")} f USING (fixture_id)
               WHERE f.season_id = @season_id
                 AND (@competition_id IS NULL OR f.league_id = @competition_id)
+              GROUP BY fl.player_id, f.league_id, f.season_id
             )
             SELECT
-              p.player_id AS id,
-              COALESCE(p.display_name, p.name, p.common_name) AS name,
+              sp.player_id AS id,
+              COALESCE(
+                p.display_name,
+                p.name,
+                p.common_name,
+                sp.lineup_name,
+                CONCAT('Player ', CAST(sp.player_id AS STRING))
+              ) AS name,
               p.position_id,
               p.image_path
             FROM scoped_players sp
-            JOIN {self._table("players")} p
+            LEFT JOIN {self._table("players")} p
               ON p.player_id = sp.player_id
-             AND p.season_id = @season_id
-             AND (@competition_id IS NULL OR p.league_id = @competition_id)
+             AND p.league_id = sp.league_id
+             AND p.season_id = sp.season_id
             QUALIFY ROW_NUMBER() OVER (
-              PARTITION BY p.player_id
+              PARTITION BY sp.player_id
               ORDER BY p.updated_at DESC
             ) = 1
             ORDER BY name
