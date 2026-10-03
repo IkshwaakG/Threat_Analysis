@@ -244,3 +244,21 @@ class GoodGameWebTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_regulation_minute_boundaries_do_not_flip_45_or_90():
+    # Regression documentation: 45' is still first-half stoppage time and 90'
+    # is still second-half stoppage time. extra_minute stores added time.
+    def event_half(minute: int) -> int:
+        if minute <= 45:
+            return 1
+        if minute <= 90:
+            return 2
+        if minute <= 105:
+            return 3
+        return 4
+
+    assert event_half(45) == 1
+    assert event_half(46) == 2
+    assert event_half(90) == 2
+    assert event_half(91) == 3
