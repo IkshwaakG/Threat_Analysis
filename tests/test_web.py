@@ -102,9 +102,12 @@ class FakeServingRepository:
             "timeline": [],
             "ball_coordinates": [
                 {"id": 1, "period_id": 100, "timer": "09:55", "x": 61.0, "y": 48.0},
-                {"id": 2, "period_id": 100, "timer": "10:00", "x": 66.0, "y": 49.0},
-                {"id": 3, "period_id": 100, "timer": "10:05", "x": 73.0, "y": 50.0},
-                {"id": 4, "period_id": 100, "timer": "10:10", "x": 81.0, "y": 50.0},
+                {"id": 2, "period_id": 100, "timer": "10:00", "x": 44.0, "y": 74.0},
+                {"id": 3, "period_id": 100, "timer": "10:05", "x": 43.0, "y": 21.0},
+                {"id": 4, "period_id": 100, "timer": "10:10", "x": 10.0, "y": 62.0},
+                {"id": 41, "period_id": 100, "timer": "10:20", "x": 72.0, "y": 49.0},
+                {"id": 42, "period_id": 100, "timer": "10:25", "x": 86.0, "y": 51.0},
+                {"id": 43, "period_id": 100, "timer": "10:30", "x": 97.0, "y": 50.0},
                 {"id": 5, "period_id": 100, "timer": "11:56", "x": 99.0, "y": 2.0},
                 {"id": 6, "period_id": 100, "timer": "12:00", "x": 96.0, "y": 8.0},
                 {"id": 7, "period_id": 100, "timer": "12:04", "x": 91.0, "y": 28.0},
@@ -175,7 +178,9 @@ class GoodGameWebTests(unittest.TestCase):
         shot = body["selectable_events"][0]["spatial"]
         self.assertEqual(shot["source"], "stored")
         self.assertGreaterEqual(len(shot["ball_track"]), 2)
-        self.assertEqual(shot["ball_path"]["start"]["x"], 73.0)
+        self.assertGreaterEqual(shot["ball_path"]["end"]["x"], 90.0)
+        self.assertLessEqual(abs(shot["ball_path"]["end"]["y"] - 50.0), 9.0)
+        self.assertNotEqual(shot["ball_path"]["end"], {"x": 10.0, "y": 62.0})
 
         corner = next(
             event["spatial"]
