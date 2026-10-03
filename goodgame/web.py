@@ -447,55 +447,131 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
         event_second = (minute + extra) * 60
+        team_side = side(item)
 
-        anchor = spatial_data.get("anchor")
-        if not isinstance(anchor, dict):
-            path = spatial_data.get("ball_path")
-            anchor = path.get("start") if isinstance(path, dict) else None
+        def team_attacks_right() -> bool:
+            # Screen orientation: home attacks right in the first half and
+            # left after half-time; away is the opposite.
+            second_half = minute >= 45 and minute < 90
+            if team_side == "home":
+                return not second_half
+            if team_side == "away":
+                return second_half
+            return True
+
+        def orient_point(point: dict[str, Any]) -> dict[str, Any]:
+            x = float(point["x"])
+            y = float(point["y"])
+            if not team_attacks_right():
+                x = 100.0 - x
+                y = 100.0 - y
+            return {
+                "x": round(x, 3),
+                "y": round(y, 3),
+                "timer": point.get("timer"),
+                "period_id": point.get("period_id"),
+            }
 
         candidates: list[tuple[int, dict[str, Any], int, float]] = []
         for index, (point, seconds) in enumerate(coordinate_stream):
             time_delta = abs(seconds - event_second)
-            if time_delta > 90:
+            if time_delta > 75:
                 continue
-            distance = 0.0
-            if isinstance(anchor, dict):
-                try:
-                    dx = float(point["x"]) - float(anchor["x"])
-                    dy = float(point["y"]) - float(anchor["y"])
-                    distance = (dx * dx + dy * dy) ** 0.5
-                except (TypeError, ValueError, KeyError):
-                    distance = 0.0
-            score = time_delta + distance * 1.8
+
+            x = float(point["x"])
+            y = float(point["y"])
+
+            if kind == "corner":
+                spatial_penalty = min(
+                    ((x - 99.0) ** 2 + (y - 1.0) ** 2) ** 0.5,
+                    ((x - 99.0) ** 2 + (y - 99.0) ** 2) ** 0.5,
+                )
+                # A corner must originate right on the attacking goal line /
+                # touchline area. Strongly reject midfield points even if their
+                # timestamp is slightly closer.
+                if x < 84.0 or min(y, 100.0 - y) > 22.0:
+                    spatial_penalty += 45.0
+                score = time_delta * 0.65 + spatial_penalty * 3.4
+            elif kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
+                target_x = 88.0 if kind == "penalty" else 82.0
+                spatial_penalty = abs(x - target_x) * 0.65 + abs(y - 50.0) * 0.12
+                if x < 55.0:
+                    spatial_penalty += 30.0
+                score = time_delta * 0.9 + spatial_penalty
+            else:
+                score = float(time_delta)
+
             candidates.append((index, point, seconds, score))
 
         if not candidates:
             return []
 
-        center_index, _, center_second, _ = min(
+        center_index, center_point, center_second, _ = min(
             candidates,
             key=lambda row: row[3],
         )
-        center_period = coordinate_stream[center_index][0].get("period_id")
+        center_period = center_point.get("period_id")
 
-        selected: list[dict[str, Any]] = []
-        start_index = max(0, center_index - 6)
-        end_index = min(len(coordinate_stream), center_index + 8)
-        for point, seconds in coordinate_stream[start_index:end_index]:
+        selected_raw: list[dict[str, Any]] = []
+        if kind == "corner":
+            # Start at the actual corner and follow only the immediate cross.
+            indexes = range(center_index, min(len(coordinate_stream), center_index + 9))
+            max_seconds = 22
+        elif kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
+            indexes = range(max(0, center_index - 1), min(len(coordinate_stream), center_index + 7))
+            max_seconds = 16
+        else:
+            indexes = range(max(0, center_index - 2), min(len(coordinate_stream), center_index + 5))
+            max_seconds = 18
+
+        for index in indexes:
+            point, seconds = coordinate_stream[index]
             if point.get("period_id") != center_period:
                 continue
-            if abs(seconds - center_second) > 28:
+            if abs(seconds - center_second) > max_seconds:
                 continue
-            selected.append(
-                {
-                    "x": round(float(point["x"]), 3),
-                    "y": round(float(point["y"]), 3),
-                    "timer": point.get("timer"),
-                    "period_id": point.get("period_id"),
-                }
-            )
 
-        return selected
+            x = float(point["x"])
+            if kind == "corner" and selected_raw and x < 72.0:
+                # Do not let a corner track wander into midfield because the
+                # next coordinate sample belongs to the next phase of play.
+                break
+            selected_raw.append(point)
+
+        if not selected_raw:
+            selected_raw = [center_point]
+
+        # Corner feeds are attacking-relative. Ensure the first point is the
+        # corner itself; if the chosen sample begins just after the kick, prepend
+        # the nearest true corner point from the same short time window.
+        if kind == "corner":
+            nearby_corner = min(
+                (
+                    row for row in candidates
+                    if float(row[1]["x"]) >= 88.0
+                    and min(float(row[1]["y"]), 100.0 - float(row[1]["y"])) <= 14.0
+                ),
+                key=lambda row: abs(row[2] - center_second),
+                default=None,
+            )
+            if nearby_corner is not None:
+                corner_point = nearby_corner[1]
+                if corner_point is not selected_raw[0]:
+                    selected_raw.insert(0, corner_point)
+
+        oriented = [orient_point(point) for point in selected_raw]
+
+        # Remove duplicate consecutive samples so the renderer does not show a
+        # thick stationary knot.
+        compact: list[dict[str, Any]] = []
+        for point in oriented:
+            if compact:
+                previous = compact[-1]
+                if abs(point["x"] - previous["x"]) < 0.15 and abs(point["y"] - previous["y"]) < 0.15:
+                    continue
+            compact.append(point)
+
+        return compact
 
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
