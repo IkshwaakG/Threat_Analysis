@@ -359,27 +359,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         and point.get("y") is not None
     ]
 
-    period_first_id: dict[Any, int] = {}
-    for point in ball_coordinates:
-        period_id = point.get("period_id")
-        if period_id is None:
-            continue
-        try:
-            coordinate_id = int(point.get("id") or 0)
-        except (TypeError, ValueError):
-            coordinate_id = 0
-        current = period_first_id.get(period_id)
-        if current is None or coordinate_id < current:
-            period_first_id[period_id] = coordinate_id
-
-    period_order = {
-        period_id: index
-        for index, (period_id, _) in enumerate(
-            sorted(period_first_id.items(), key=lambda item: item[1])
-        )
-    }
-
     def timer_seconds(value: Any) -> int | None:
+        """Sportmonks timer is match time in MM:SS."""
         if value is None:
             return None
         text = str(value).strip()
@@ -393,21 +374,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             return None
 
-    def absolute_coordinate_second(point: dict[str, Any]) -> int | None:
-        seconds = timer_seconds(point.get("timer"))
-        if seconds is None:
-            return None
-        order = period_order.get(point.get("period_id"), 0)
-        if order == 1 and seconds < 45 * 60:
-            seconds += 45 * 60
-        elif order == 2 and seconds < 90 * 60:
-            seconds += 90 * 60
-        elif order >= 3 and seconds < 105 * 60:
-            seconds += 105 * 60
-        return seconds
-
     coordinate_stream = [
-        (point, absolute_coordinate_second(point))
+        (point, timer_seconds(point.get("timer")))
         for point in ball_coordinates
     ]
     coordinate_stream = [
@@ -427,11 +395,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         spatial_data: dict[str, Any],
         kind: str,
     ) -> list[dict[str, Any]]:
-        """Return the provider ball samples nearest the selected event.
+        """Match one event to a plausible Sportmonks ball-coordinate segment.
 
-        Sportmonks ballCoordinates are already pitch coordinates. Do not mirror
-        them by team/half. Match by period when available and by the event's
-        minute window, preserving provider order.
+        ballCoordinates are frequent ball samples, not event-attached paths.
+        Match by period/time first, then require geometry appropriate to the
+        event type. Never mirror provider coordinates by team or half.
         """
         if kind not in {
             "goal",
@@ -455,6 +423,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         event_minute = minute + extra
         event_period_id = item.get("period_id")
+        minute_start = event_minute * 60
+        minute_end = minute_start + 59
 
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -464,6 +434,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "period_id": point.get("period_id"),
             }
 
+        def goal_line_distance(point: dict[str, Any]) -> float:
+            x = float(point["x"])
+            return min(abs(x), abs(100.0 - x))
+
+        def goal_center_distance(point: dict[str, Any]) -> float:
+            return abs(float(point["y"]) - 50.0)
+
+        def touchline_distance(point: dict[str, Any]) -> float:
+            y = float(point["y"])
+            return min(abs(y), abs(100.0 - y))
+
         same_period = [
             (point, seconds)
             for point, seconds in coordinate_stream
@@ -472,53 +453,149 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if not same_period:
             same_period = coordinate_stream
 
-        # Prefer samples whose provider timer falls inside the selected event's
-        # minute. Timeline/events generally provide minute granularity, while
-        # ballCoordinates supply the seconds.
-        minute_start = event_minute * 60
-        minute_end = minute_start + 59
-        in_minute = [
+        # The event feed usually gives minute granularity, while coordinates
+        # have seconds. Include a small boundary pad so events near :00/:59 are
+        # not forced onto the wrong sample.
+        time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if minute_start <= seconds <= minute_end
+            if minute_start - 12 <= seconds <= minute_end + 12
         ]
-
-        if in_minute:
-            candidates = in_minute
-        else:
-            # Fallback only when the event minute has no coordinate sample.
-            # Keep a narrow nearest-time window rather than applying football
-            # heuristics such as "corners must be near x=100".
-            candidates = sorted(
-                same_period,
-                key=lambda row: (
-                    abs(row[1] - minute_start),
-                    int(row[0].get("id") or 0),
-                ),
-            )[:8]
-            candidates.sort(key=lambda row: (row[1], int(row[0].get("id") or 0)))
-
-        if not candidates:
+        if not time_candidates:
             return []
 
-        # Preserve a short contiguous section of the provider stream. Do not
-        # spatially re-score, mirror, or invent intermediate player positions.
-        if len(candidates) > 12:
-            candidates = candidates[:12]
-
-        compact: list[dict[str, Any]] = []
-        for point, _ in candidates:
-            normalized = provider_point(point)
-            if compact:
-                previous = compact[-1]
+        # Remove exact stationary repeats before trying to identify the local
+        # action. Sportmonks often repeats a coordinate for several samples.
+        compact_rows: list[tuple[dict[str, Any], int]] = []
+        for point, seconds in time_candidates:
+            if compact_rows:
+                previous = compact_rows[-1][0]
                 if (
-                    abs(normalized["x"] - previous["x"]) < 0.01
-                    and abs(normalized["y"] - previous["y"]) < 0.01
+                    abs(float(point["x"]) - float(previous["x"])) < 0.01
+                    and abs(float(point["y"]) - float(previous["y"])) < 0.01
                 ):
                     continue
-            compact.append(normalized)
+            compact_rows.append((point, seconds))
 
-        return compact
+        if not compact_rows:
+            return []
+
+        def time_score(seconds: int) -> float:
+            # We do not know the event second. Prefer the selected minute over
+            # the padded neighboring seconds, but let event geometry dominate.
+            if minute_start <= seconds <= minute_end:
+                return 0.0
+            return min(abs(seconds - minute_start), abs(seconds - minute_end))
+
+        if kind == "corner":
+            corner_candidates = [
+                (index, point, seconds)
+                for index, (point, seconds) in enumerate(compact_rows)
+                if goal_line_distance(point) <= 10.0
+                and touchline_distance(point) <= 12.0
+            ]
+            if not corner_candidates:
+                return []
+
+            start_index, _, _ = min(
+                corner_candidates,
+                key=lambda row: (
+                    goal_line_distance(row[1]) * 3.0
+                    + touchline_distance(row[1]) * 3.0
+                    + time_score(row[2]) * 0.3
+                ),
+            )
+            selected = compact_rows[start_index : start_index + 5]
+            if not selected:
+                return []
+            first_second = selected[0][1]
+            selected = [
+                row for row in selected
+                if row[1] - first_second <= 22
+            ]
+
+        elif kind in {"goal", "shot_on_target", "penalty"}:
+            # Actual goal width is only about 11% of pitch width. Allow some
+            # provider/tracking tolerance, but reject wide trajectories such as
+            # y=62 as "on target".
+            endpoint_candidates = [
+                (index, point, seconds)
+                for index, (point, seconds) in enumerate(compact_rows)
+                if goal_line_distance(point) <= 16.0
+                and goal_center_distance(point) <= 9.0
+            ]
+            if not endpoint_candidates:
+                return []
+
+            end_index, _, _ = min(
+                endpoint_candidates,
+                key=lambda row: (
+                    goal_line_distance(row[1]) * 4.0
+                    + goal_center_distance(row[1]) * 2.0
+                    + time_score(row[2]) * 0.25
+                ),
+            )
+            end_second = compact_rows[end_index][1]
+            start_index = end_index
+            while start_index > 0:
+                previous_second = compact_rows[start_index - 1][1]
+                if end_second - previous_second > 18:
+                    break
+                if end_index - start_index >= 4:
+                    break
+                start_index -= 1
+            selected = compact_rows[start_index : end_index + 1]
+
+        elif kind in {"shot", "shot_off_target"}:
+            # We have no Z axis, so an off-target shot over the bar may still
+            # be central in Y. The reliable constraint is that the action gets
+            # close to one of the goal lines.
+            endpoint_candidates = [
+                (index, point, seconds)
+                for index, (point, seconds) in enumerate(compact_rows)
+                if goal_line_distance(point) <= 18.0
+            ]
+            if not endpoint_candidates:
+                return []
+
+            end_index, _, _ = min(
+                endpoint_candidates,
+                key=lambda row: (
+                    goal_line_distance(row[1]) * 3.0
+                    + time_score(row[2]) * 0.25
+                ),
+            )
+            end_second = compact_rows[end_index][1]
+            start_index = end_index
+            while start_index > 0:
+                previous_second = compact_rows[start_index - 1][1]
+                if end_second - previous_second > 18:
+                    break
+                if end_index - start_index >= 4:
+                    break
+                start_index -= 1
+            selected = compact_rows[start_index : end_index + 1]
+
+        else:  # offside
+            # Offside is a point-in-time event, not a shot trajectory. Use the
+            # closest coordinate in the selected minute as a location marker.
+            selected = [
+                min(
+                    compact_rows,
+                    key=lambda row: (
+                        time_score(row[1]),
+                        abs(row[1] - (minute_start + 30)),
+                    ),
+                )
+            ]
+
+        result = [provider_point(point) for point, _ in selected]
+
+        # A trajectory needs at least two distinct points. For single-point
+        # events (notably offside) returning one point is intentional.
+        if kind != "offside" and len(result) < 2:
+            return []
+        return result
 
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
