@@ -930,6 +930,20 @@ class BigQueryServingRepository:
                AND p.season_id = s.season_id
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE s.fixture_id = @fixture_id
+            ),
+            ball_coordinates AS (
+              SELECT
+                coordinate_id,
+                period_id,
+                timer,
+                LEAST(100.0, GREATEST(0.0,
+                  IF(ABS(x) <= 1.5, x * 100.0, x)
+                )) AS x,
+                LEAST(100.0, GREATEST(0.0,
+                  IF(ABS(y) <= 1.5, y * 100.0, y)
+                )) AS y
+              FROM {self._table("fixture_ball_coordinates")}
+              WHERE fixture_id = @fixture_id
             )
             SELECT
               'fixture' AS row_kind,
@@ -1138,6 +1152,19 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'ball_coordinate' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                b.coordinate_id AS id,
+                b.period_id,
+                b.timer,
+                b.x,
+                b.y
+              )) AS payload
+            FROM ball_coordinates b
+
+            UNION ALL
+
+            SELECT
               'standing' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 s.team_id,
@@ -1165,6 +1192,7 @@ class BigQueryServingRepository:
         weather: dict[str, Any] | None = None
         sidelined: list[dict[str, Any]] = []
         raw_fact: dict[str, Any] = {}
+        ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
 
         for row in rows:
@@ -1237,6 +1265,8 @@ class BigQueryServingRepository:
                 sidelined.append(data)
             elif kind == "raw_fact":
                 raw_fact = data
+            elif kind == "ball_coordinate":
+                ball_coordinates.append(data)
             elif kind == "standing":
                 standings.append(data)
 
@@ -1343,6 +1373,22 @@ class BigQueryServingRepository:
             )
         )
 
+        def _timer_seconds(item: dict[str, Any]) -> tuple[int, int]:
+            timer = str(item.get("timer") or "")
+            try:
+                minute, second = timer.split(":", 1)
+                return int(minute), int(second)
+            except (TypeError, ValueError):
+                return 999, 999
+
+        ball_coordinates.sort(
+            key=lambda item: (
+                item.get("period_id") if item.get("period_id") is not None else 999999999,
+                *_timer_seconds(item),
+                item.get("id") if item.get("id") is not None else 0,
+            )
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
@@ -1356,6 +1402,7 @@ class BigQueryServingRepository:
             "weather": weather,
             "sidelined": sidelined,
             "raw_fact": raw_fact,
+            "ball_coordinates": ball_coordinates,
             "standings": standings,
             "source": "bigquery",
         }
