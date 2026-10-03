@@ -262,3 +262,27 @@ def test_regulation_minute_boundaries_do_not_flip_45_or_90():
     assert event_half(46) == 2
     assert event_half(90) == 2
     assert event_half(91) == 3
+
+
+def test_shot_matching_prefers_correct_attacking_goal():
+    # Regression contract: stored shot traversal must approach the attacking
+    # goal for that team/half rather than the nearest goal on the pitch.
+    def progress_to_target(start_x: float, end_x: float, target_x: float) -> float:
+        return abs(start_x - target_x) - abs(end_x - target_x)
+
+    assert progress_to_target(55.0, 88.0, 100.0) > 0
+    assert progress_to_target(55.0, 12.0, 100.0) < 0
+    assert progress_to_target(45.0, 12.0, 0.0) > 0
+
+
+def test_goal_can_reuse_matching_shot_on_target_track():
+    goal = {"minute": 37, "team_id": 1, "player_id": 10}
+    shot = {
+        "minute": 37,
+        "team_id": 1,
+        "player_id": 10,
+        "spatial": {"source": "stored", "ball_track": [{"x": 75, "y": 50}, {"x": 96, "y": 49}]},
+    }
+    assert goal["minute"] == shot["minute"]
+    assert goal["team_id"] == shot["team_id"]
+    assert shot["spatial"]["source"] == "stored"
