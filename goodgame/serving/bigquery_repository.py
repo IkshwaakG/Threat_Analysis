@@ -830,10 +830,28 @@ class BigQueryServingRepository:
               ORDER BY updated_at DESC
               LIMIT 1
             ),
+            fixture_video_event_batch AS (
+              SELECT MAX(ve.created_at) AS created_at
+              FROM {self._table("fixture_video_events")} ve
+              JOIN fixture_video fv
+                ON fv.provider = ve.provider
+               AND fv.video_id = ve.video_id
+              WHERE ve.fixture_id = @fixture_id
+            ),
             fixture_video_events AS (
-              SELECT *
-              FROM {self._table("fixture_video_events")}
-              WHERE fixture_id = @fixture_id
+              SELECT ve.*
+              FROM {self._table("fixture_video_events")} ve
+              JOIN fixture_video fv
+                ON fv.provider = ve.provider
+               AND fv.video_id = ve.video_id
+              CROSS JOIN fixture_video_event_batch batch
+              WHERE ve.fixture_id = @fixture_id
+                AND ve.created_at = batch.created_at
+                AND ve.event_type != '__analysis_empty__'
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(CAST(ve.match_event_id AS STRING), ve.video_event_id)
+                ORDER BY ve.confidence DESC, ve.updated_at DESC
+              ) = 1
             ),
             season_standings AS (
               SELECT
@@ -1251,7 +1269,7 @@ class BigQueryServingRepository:
                 v.url,
                 v.title,
                 v.role,
-                v.event_sync
+                EXISTS(SELECT 1 FROM fixture_video_events) AS event_sync
               )) AS payload
             FROM fixture_video v
 
