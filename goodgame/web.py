@@ -439,11 +439,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         spatial_data: dict[str, Any],
         kind: str,
     ) -> list[dict[str, Any]]:
-        """Match one event to a plausible Sportmonks ball-coordinate segment.
+        """Match an event to the most plausible stored Sportmonks ball segment.
 
-        ballCoordinates are frequent ball samples, not event-attached paths.
-        Match by period/time first, then require geometry appropriate to the
-        event type. Never mirror provider coordinates by team or half.
+        ballCoordinates are a frequent time series rather than event-attached
+        paths. Match by period/time, then score short contiguous segments
+        against the *correct attacking goal* for the event team and half.
+        Provider x/y values are rendered directly; they are never mirrored.
         """
         if kind not in {
             "goal",
@@ -469,6 +470,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         event_period_id = item.get("period_id")
         minute_start = event_minute * 60
         minute_end = minute_start + 59
+        team_side = side(item)
+        target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
 
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -478,7 +481,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "period_id": point.get("period_id"),
             }
 
-        def goal_line_distance(point: dict[str, Any]) -> float:
+        def distance_to_target_goal(point: dict[str, Any]) -> float:
+            return abs(float(point["x"]) - target_goal_x)
+
+        def nearest_goal_line_distance(point: dict[str, Any]) -> float:
             x = float(point["x"])
             return min(abs(x), abs(100.0 - x))
 
@@ -497,9 +503,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if not same_period:
             same_period = coordinate_stream
 
-        # The event feed usually gives minute granularity, while coordinates
-        # have seconds. Include a small boundary pad so events near :00/:59 are
-        # not forced onto the wrong sample.
+        # Sportmonks events expose minute granularity while ballCoordinates
+        # expose seconds. Keep a narrow pad around the selected event minute.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
@@ -508,8 +513,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if not time_candidates:
             return []
 
-        # Remove exact stationary repeats before trying to identify the local
-        # action. Sportmonks often repeats a coordinate for several samples.
+        # Collapse repeated stationary samples but preserve provider order.
         compact_rows: list[tuple[dict[str, Any], int]] = []
         for point, seconds in time_candidates:
             if compact_rows:
@@ -525,17 +529,73 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return []
 
         def time_score(seconds: int) -> float:
-            # We do not know the event second. Prefer the selected minute over
-            # the padded neighboring seconds, but let event geometry dominate.
             if minute_start <= seconds <= minute_end:
                 return 0.0
             return min(abs(seconds - minute_start), abs(seconds - minute_end))
 
+        def build_approach_segment(
+            *,
+            on_target: bool,
+            max_goal_distance: float,
+        ) -> list[tuple[dict[str, Any], int]]:
+            """Pick the short contiguous segment that best approaches target goal."""
+            endpoint_candidates: list[tuple[float, int]] = []
+            for index, (point, seconds) in enumerate(compact_rows):
+                target_distance = distance_to_target_goal(point)
+                if target_distance > max_goal_distance:
+                    continue
+
+                center_penalty = 0.0
+                if on_target:
+                    # We have no Z coordinate, so allow provider tolerance but
+                    # keep on-target endpoints near the goal mouth in Y.
+                    center_distance = goal_center_distance(point)
+                    if center_distance > GOAL_HALF_WIDTH_PERCENT + 8.0:
+                        continue
+                    center_penalty = center_distance * 1.7
+
+                # Prefer samples nearest the correct attacking goal, then those
+                # inside the actual event minute.
+                score = target_distance * 4.0 + center_penalty + time_score(seconds) * 0.25
+                endpoint_candidates.append((score, index))
+
+            if not endpoint_candidates:
+                return []
+
+            endpoint_candidates.sort(key=lambda row: row[0])
+
+            for _, end_index in endpoint_candidates:
+                end_point, end_second = compact_rows[end_index]
+                end_distance = distance_to_target_goal(end_point)
+
+                best_start_index: int | None = None
+                best_progress = 0.0
+                for start_index in range(max(0, end_index - 4), end_index):
+                    start_point, start_second = compact_rows[start_index]
+                    if end_second - start_second > 20:
+                        continue
+                    progress = distance_to_target_goal(start_point) - end_distance
+                    if progress > best_progress:
+                        best_progress = progress
+                        best_start_index = start_index
+
+                # A shot trajectory should actually move toward the target
+                # goal. Requiring modest progress avoids selecting unrelated
+                # possession samples from the same minute.
+                if best_start_index is None or best_progress < 3.0:
+                    continue
+
+                return compact_rows[best_start_index : end_index + 1]
+
+            return []
+
         if kind == "corner":
+            # A corner origin is both near a goal line and touchline. Prefer the
+            # corner at this team's attacking end, then keep the path in that end.
             corner_candidates = [
                 (index, point, seconds)
                 for index, (point, seconds) in enumerate(compact_rows)
-                if goal_line_distance(point) <= 10.0
+                if distance_to_target_goal(point) <= 10.0
                 and touchline_distance(point) <= 12.0
             ]
             if not corner_candidates:
@@ -544,7 +604,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             start_index, _, _ = min(
                 corner_candidates,
                 key=lambda row: (
-                    goal_line_distance(row[1]) * 3.0
+                    distance_to_target_goal(row[1]) * 3.0
                     + touchline_distance(row[1]) * 3.0
                     + time_score(row[2]) * 0.3
                 ),
@@ -552,92 +612,38 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             selected = compact_rows[start_index : start_index + 5]
             if not selected:
                 return []
-            first_second = selected[0][1]
-            corner_start_x = float(selected[0][0]["x"])
-            corner_on_left_goal = corner_start_x < 50.0
 
+            first_second = selected[0][1]
+            target_is_left = target_goal_x < 50.0
             same_end: list[tuple[dict[str, Any], int]] = []
             for row in selected:
                 point, seconds = row
                 if seconds - first_second > 22:
                     break
                 point_x = float(point["x"])
-                # A corner cross must stay in the same attacking end. If the
-                # coordinate stream jumps across midfield, that sample belongs
-                # to a later phase of play and is not part of this corner.
                 if same_end:
-                    if corner_on_left_goal and point_x > 48.0:
+                    if target_is_left and point_x > 48.0:
                         break
-                    if not corner_on_left_goal and point_x < 52.0:
+                    if not target_is_left and point_x < 52.0:
                         break
                 same_end.append(row)
             selected = same_end
 
         elif kind in {"goal", "shot_on_target", "penalty"}:
-            # Actual goal width is only about 11% of pitch width. Allow some
-            # provider/tracking tolerance, but reject wide trajectories such as
-            # y=62 as "on target".
-            endpoint_candidates = [
-                (index, point, seconds)
-                for index, (point, seconds) in enumerate(compact_rows)
-                if goal_line_distance(point) <= 12.0
-                and goal_center_distance(point) <= GOAL_HALF_WIDTH_PERCENT + 1.5
-            ]
-            if not endpoint_candidates:
-                return []
-
-            end_index, _, _ = min(
-                endpoint_candidates,
-                key=lambda row: (
-                    goal_line_distance(row[1]) * 4.0
-                    + goal_center_distance(row[1]) * 2.0
-                    + time_score(row[2]) * 0.25
-                ),
+            selected = build_approach_segment(
+                on_target=True,
+                max_goal_distance=28.0,
             )
-            end_second = compact_rows[end_index][1]
-            start_index = end_index
-            while start_index > 0:
-                previous_second = compact_rows[start_index - 1][1]
-                if end_second - previous_second > 18:
-                    break
-                if end_index - start_index >= 4:
-                    break
-                start_index -= 1
-            selected = compact_rows[start_index : end_index + 1]
 
         elif kind in {"shot", "shot_off_target"}:
-            # We have no Z axis, so an off-target shot over the bar may still
-            # be central in Y. The reliable constraint is that the action gets
-            # close to one of the goal lines.
-            endpoint_candidates = [
-                (index, point, seconds)
-                for index, (point, seconds) in enumerate(compact_rows)
-                if goal_line_distance(point) <= 18.0
-            ]
-            if not endpoint_candidates:
-                return []
-
-            end_index, _, _ = min(
-                endpoint_candidates,
-                key=lambda row: (
-                    goal_line_distance(row[1]) * 3.0
-                    + time_score(row[2]) * 0.25
-                ),
+            # Off-target can miss wide or over the bar. With no Z coordinate,
+            # only require a meaningful approach toward the correct goal.
+            selected = build_approach_segment(
+                on_target=False,
+                max_goal_distance=32.0,
             )
-            end_second = compact_rows[end_index][1]
-            start_index = end_index
-            while start_index > 0:
-                previous_second = compact_rows[start_index - 1][1]
-                if end_second - previous_second > 18:
-                    break
-                if end_index - start_index >= 4:
-                    break
-                start_index -= 1
-            selected = compact_rows[start_index : end_index + 1]
 
         else:  # offside
-            # Offside is a point-in-time event, not a shot trajectory. Use the
-            # closest coordinate in the selected minute as a location marker.
             selected = [
                 min(
                     compact_rows,
@@ -649,9 +655,6 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ]
 
         result = [provider_point(point) for point, _ in selected]
-
-        # A trajectory needs at least two distinct points. For single-point
-        # events (notably offside) returning one point is intentional.
         if kind != "offside" and len(result) < 2:
             return []
         return result
@@ -902,6 +905,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     # shot-on-target event. Keep the Goal as the canonical selectable event
     # when minute/team/scorer identify the same action.
     goals = [event for event in merged if event.get("spatial", {}).get("kind") == "goal"]
+    shots_on_target = [
+        event for event in merged
+        if event.get("spatial", {}).get("kind") == "shot_on_target"
+    ]
 
     def same_actor(a: dict[str, Any], b: dict[str, Any]) -> bool:
         if a.get("player_id") is not None and b.get("player_id") is not None:
@@ -910,6 +917,48 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         b_name = str(b.get("player") or "").strip().casefold()
         return bool(a_name and b_name and a_name == b_name)
 
+    # When Sportmonks exposes a goal plus its scored shot as separate
+    # events, the shot-on-target entry may be the one that resolves cleanly to
+    # the coordinate stream. Transfer that stored traversal onto the Goal
+    # before removing the duplicate shot event.
+    for goal in goals:
+        goal_spatial = goal.get("spatial") or {}
+        if goal_spatial.get("source") == "stored" and goal_spatial.get("ball_track"):
+            continue
+
+        candidates = [
+            shot for shot in shots_on_target
+            if shot.get("minute") == goal.get("minute")
+            and shot.get("extra_minute") == goal.get("extra_minute")
+            and shot.get("team_id") == goal.get("team_id")
+            and (
+                same_actor(goal, shot)
+                or goal.get("player_id") is None
+                or shot.get("player_id") is None
+            )
+            and (shot.get("spatial") or {}).get("source") == "stored"
+            and (shot.get("spatial") or {}).get("ball_track")
+        ]
+        if not candidates:
+            continue
+
+        shot = candidates[0]
+        shot_spatial = shot["spatial"]
+        track = list(shot_spatial.get("ball_track") or [])
+        if not track:
+            continue
+
+        goal_spatial["source"] = "stored"
+        goal_spatial["anchor"] = track[0]
+        goal_spatial["ball_track"] = track
+        goal_spatial["ball_path"] = {
+            "start": track[0],
+            "end": track[-1],
+        }
+        goal["spatial"] = goal_spatial
+        goal["ball_track"] = track
+        goal["ball_path"] = goal_spatial["ball_path"]
+
     cleaned: list[dict[str, Any]] = []
     for event in merged:
         if event.get("spatial", {}).get("kind") == "shot_on_target":
@@ -917,7 +966,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 goal.get("minute") == event.get("minute")
                 and goal.get("extra_minute") == event.get("extra_minute")
                 and goal.get("team_id") == event.get("team_id")
-                and same_actor(goal, event)
+                and (
+                    same_actor(goal, event)
+                    or goal.get("player_id") is None
+                    or event.get("player_id") is None
+                )
                 for goal in goals
             )
             if duplicate_goal:
