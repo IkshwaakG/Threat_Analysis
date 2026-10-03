@@ -347,14 +347,41 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return str(player.get("team") or "") or None
         return None
 
-    def attacking_x(team_side: str | None, home_x: float, away_x: float) -> float:
-        # Starting formation: home is left, away is right.
-        # Therefore home attacks the right half and away attacks the left half.
-        if team_side == "away":
-            return away_x
+    def event_half(item: dict[str, Any]) -> int:
+        """Return regulation half from event match minute.
+
+        Sportmonks period ids are opaque identifiers, while event minute is
+        directly usable for first/second-half attacking direction. Extra time
+        continues alternating ends every period.
+        """
+        try:
+            minute = int(item.get("minute") or 0)
+        except (TypeError, ValueError):
+            minute = 0
+        if minute < 45:
+            return 1
+        if minute < 90:
+            return 2
+        if minute < 105:
+            return 3
+        return 4
+
+    def attacking_x(
+        item: dict[str, Any],
+        team_side: str | None,
+        home_x: float,
+        away_x: float,
+    ) -> float:
+        """Resolve attacking end, reversing sides after each regulation half."""
+        half = event_half(item)
+        reversed_ends = half in {2, 4}
+
         if team_side == "home":
-            return home_x
-        # Unknown ownership stays central instead of silently pretending to be home.
+            return away_x if reversed_ends else home_x
+        if team_side == "away":
+            return home_x if reversed_ends else away_x
+
+        # Unknown ownership stays central instead of inventing direction.
         return 50.0
 
     ball_coordinates = [
@@ -652,7 +679,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     + int(item.get("sort_order") or 0)
                 )
                 if kind == "goal":
-                    end = {"x": attacking_x(team_side, 100.0, 0.0), "y": 50.0}
+                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
                 elif kind == "corner":
                     start_x = float(start_point.get("x") or 50.0)
                     start_y = float(start_point.get("y") or 50.0)
@@ -675,7 +702,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         end_y = 50.0 + target_offsets[seed % len(target_offsets)]
                     else:
                         end_y = 50.0
-                    end = {"x": attacking_x(team_side, 100.0, 0.0), "y": end_y}
+                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
 
             normalized_path = (
                 {"start": start_point, "end": end if isinstance(end, dict) else None}
@@ -694,10 +721,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             # Until provider ball coordinates are available, keep this deliberately
             # simple and explicit: penalty spot -> attacking goal.
             start = {
-                "x": attacking_x(team_side, PENALTY_SPOT_RIGHT_X, PENALTY_SPOT_LEFT_X),
+                "x": attacking_x(item, team_side, PENALTY_SPOT_RIGHT_X, PENALTY_SPOT_LEFT_X),
                 "y": 50.0,
             }
-            end = {"x": attacking_x(team_side, 100.0, 0.0), "y": 50.0}
+            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
             return {
                 "kind": kind,
                 "source": "inferred",
@@ -717,11 +744,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             else:
                 corner_y = 2.0 if seed % 2 == 0 else 98.0
 
-            # We only use team/half information to choose which goal-line end
-            # the inferred corner starts from. Once start_x is chosen, end_x
-            # is derived from that same goal end so the cross cannot jump to
-            # the opposite half.
-            start_x = attacking_x(team_side, 99.0, 1.0)
+            # Use the event half to choose the attacking end. Teams exchange
+            # ends after half-time, so home/away alone is not enough.
+            # Once start_x is chosen, keep the entire corner in that same end.
+            start_x = attacking_x(item, team_side, 99.0, 1.0)
             box_y = 43.0 if corner_y < 50.0 else 57.0
             end_x = 13.0 if start_x < 50.0 else 87.0
             start = {"x": start_x, "y": corner_y}
@@ -737,7 +763,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
             start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
             start = {
-                "x": attacking_x(team_side, start_x, 100.0 - start_x),
+                "x": attacking_x(item, team_side, start_x, 100.0 - start_x),
                 "y": player_anchor["y"] if player_anchor else 50.0,
             }
             if kind == "shot_off_target":
@@ -762,7 +788,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 end_y = 50.0 + target_offsets[seed % len(target_offsets)]
             else:
                 end_y = 50.0
-            end = {"x": attacking_x(team_side, 100.0, 0.0), "y": end_y}
+            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
             return {
                 "kind": kind,
                 "source": "inferred",
@@ -773,7 +799,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         if kind == "offside":
             anchor = {
-                "x": attacking_x(team_side, 82.0, 18.0),
+                "x": attacking_x(item, team_side, 82.0, 18.0),
                 "y": player_anchor["y"] if player_anchor else 50.0,
             }
         elif player_anchor:
