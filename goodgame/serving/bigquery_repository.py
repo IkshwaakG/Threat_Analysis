@@ -831,23 +831,7 @@ class BigQueryServingRepository:
               LIMIT 1
             ),
             fixture_video_events AS (
-              SELECT
-                video_event_key,
-                provider,
-                video_id,
-                event_type,
-                display_label,
-                match_minute,
-                extra_minute,
-                video_start_seconds,
-                video_end_seconds,
-                team_name,
-                player_name,
-                related_player_name,
-                confidence,
-                analysis,
-                ball_track,
-                player_positions
+              SELECT *
               FROM {self._table("fixture_video_events")}
               WHERE fixture_id = @fixture_id
             ),
@@ -1275,24 +1259,7 @@ class BigQueryServingRepository:
 
             SELECT
               'video_event' AS row_kind,
-              TO_JSON_STRING(STRUCT(
-                v.video_event_key,
-                v.provider,
-                v.video_id,
-                v.event_type,
-                v.display_label,
-                v.match_minute,
-                v.extra_minute,
-                v.video_start_seconds,
-                v.video_end_seconds,
-                v.team_name,
-                v.player_name,
-                v.related_player_name,
-                v.confidence,
-                v.analysis,
-                v.ball_track,
-                v.player_positions
-              )) AS payload
+              TO_JSON_STRING(v) AS payload
             FROM fixture_video_events v
 
             UNION ALL
@@ -1541,6 +1508,12 @@ class BigQueryServingRepository:
                 item.get("period_id") if item.get("period_id") is not None else 999999999,
                 *_timer_seconds(item),
                 item.get("id") if item.get("id") is not None else 0,
+            )
+        )
+        video_events.sort(
+            key=lambda item: (
+                item.get("sequence") if item.get("sequence") is not None else 999999999,
+                item.get("video_start_seconds") if item.get("video_start_seconds") is not None else 999999999,
             )
         )
 

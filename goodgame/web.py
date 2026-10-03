@@ -989,6 +989,19 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "away"
         return None
 
+    def _video_team_side(team_id: Any) -> str | None:
+        try:
+            normalized = int(team_id)
+            home_id = int(home_team_id) if home_team_id is not None else None
+            away_id = int(away_team_id) if away_team_id is not None else None
+        except (TypeError, ValueError):
+            return None
+        if normalized == home_id:
+            return "home"
+        if normalized == away_id:
+            return "away"
+        return None
+
     def _video_track(value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
@@ -1042,11 +1055,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         return {
             "provider": video.get("provider"),
             "video_id": video.get("video_id"),
-            "video_event_key": video.get("video_event_key"),
+            "video_event_key": (
+                video.get("video_event_key")
+                or video.get("video_event_id")
+                or video.get("id")
+            ),
             "start_seconds": video.get("video_start_seconds"),
             "end_seconds": video.get("video_end_seconds"),
             "confidence": video.get("confidence"),
             "analysis": video.get("analysis"),
+            "source": video.get("source"),
+            "transcript_text": video.get("transcript_text"),
         }
 
     for video in game.get("video_events", []) or []:
@@ -1054,12 +1073,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         minute = video.get("match_minute")
+        player_id = video.get("player_id")
+        player_name = str(video.get("player_name") or player_name_for_id(player_id) or "").strip()
+        event_label = video.get("display_label") or video.get("event_label") or video.get("transcript_text")
         kind = category({
             "type": video.get("event_type"),
-            "text": video.get("display_label"),
+            "text": event_label,
         })
-        video_side = _video_name_side(video.get("team_name"))
-        player_name = str(video.get("player_name") or "").strip()
+        video_side = _video_name_side(video.get("team_name")) or _video_team_side(video.get("team_id"))
+        video_event_id = video.get("video_event_key") or video.get("video_event_id") or video.get("id")
         track = _video_track(video.get("ball_track"))
         positions = _video_positions(video.get("player_positions"))
 
@@ -1081,10 +1103,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 minute_delta = 2
 
             score = float(minute_delta)
+            if (
+                video.get("match_event_id") is not None
+                and str(existing.get("id")) == str(video.get("match_event_id"))
+            ):
+                score -= 10.0
             existing_side = side(existing)
             if video_side and existing_side and video_side != existing_side:
                 score += 6.0
 
+            if player_id is not None and existing.get("player_id") is not None:
+                if str(player_id) == str(existing.get("player_id")):
+                    score -= 0.5
+                else:
+                    score += 2.0
             existing_player = str(existing.get("player") or "").strip().casefold()
             if player_name and existing_player:
                 if player_name.casefold() == existing_player:
@@ -1097,19 +1129,26 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         if matched is None:
             item: dict[str, Any] = {
-                "id": f"video:{video.get('video_event_key')}",
+                "id": f"video:{video_event_id}",
                 "minute": minute,
-                "extra_minute": video.get("extra_minute"),
+                "extra_minute": video.get("extra_minute", video.get("match_extra_minute")),
                 "type": video.get("event_type") or kind,
-                "text": video.get("display_label") or video.get("event_type") or kind,
-                "player": video.get("player_name"),
+                "text": event_label or video.get("event_type") or kind,
+                "player": player_name or None,
+                "player_id": player_id,
                 "related_player_name": video.get("related_player_name"),
                 "source_kind": "video",
                 "video_analysis": _video_event_meta(video),
                 "video_start_seconds": video.get("video_start_seconds"),
                 "video_end_seconds": video.get("video_end_seconds"),
                 "video_confidence": video.get("confidence"),
-                "detail": video.get("analysis") if isinstance(video.get("analysis"), dict) else {},
+                "detail": (
+                    video.get("analysis")
+                    if isinstance(video.get("analysis"), dict)
+                    else {"transcript_text": video.get("transcript_text")}
+                    if video.get("transcript_text")
+                    else {}
+                ),
             }
             if video_side == "home":
                 item["is_home"] = True
@@ -1137,6 +1176,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         matched["video_start_seconds"] = video.get("video_start_seconds")
         matched["video_end_seconds"] = video.get("video_end_seconds")
         matched["video_confidence"] = video.get("confidence")
+        if player_id is not None and matched.get("player_id") is None:
+            matched["player_id"] = player_id
+        if player_name and not matched.get("player"):
+            matched["player"] = player_name
 
         if positions and not matched.get("player_positions"):
             matched["player_positions"] = positions
