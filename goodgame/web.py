@@ -351,6 +351,152 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         # Unknown ownership stays central instead of silently pretending to be home.
         return 50.0
 
+    ball_coordinates = [
+        point
+        for point in game.get("ball_coordinates", []) or []
+        if isinstance(point, dict)
+        and point.get("x") is not None
+        and point.get("y") is not None
+    ]
+
+    period_first_id: dict[Any, int] = {}
+    for point in ball_coordinates:
+        period_id = point.get("period_id")
+        if period_id is None:
+            continue
+        try:
+            coordinate_id = int(point.get("id") or 0)
+        except (TypeError, ValueError):
+            coordinate_id = 0
+        current = period_first_id.get(period_id)
+        if current is None or coordinate_id < current:
+            period_first_id[period_id] = coordinate_id
+
+    period_order = {
+        period_id: index
+        for index, (period_id, _) in enumerate(
+            sorted(period_first_id.items(), key=lambda item: item[1])
+        )
+    }
+
+    def timer_seconds(value: Any) -> int | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            if ":" in text:
+                minute, second = text.split(":", 1)
+                return int(minute) * 60 + int(float(second))
+            return int(float(text) * 60)
+        except (TypeError, ValueError):
+            return None
+
+    def absolute_coordinate_second(point: dict[str, Any]) -> int | None:
+        seconds = timer_seconds(point.get("timer"))
+        if seconds is None:
+            return None
+        order = period_order.get(point.get("period_id"), 0)
+        if order == 1 and seconds < 45 * 60:
+            seconds += 45 * 60
+        elif order == 2 and seconds < 90 * 60:
+            seconds += 90 * 60
+        elif order >= 3 and seconds < 105 * 60:
+            seconds += 105 * 60
+        return seconds
+
+    coordinate_stream = [
+        (point, absolute_coordinate_second(point))
+        for point in ball_coordinates
+    ]
+    coordinate_stream = [
+        (point, seconds)
+        for point, seconds in coordinate_stream
+        if seconds is not None
+    ]
+    coordinate_stream.sort(
+        key=lambda item: (
+            item[1],
+            int(item[0].get("id") or 0),
+        )
+    )
+
+    def event_coordinate_track(
+        item: dict[str, Any],
+        spatial_data: dict[str, Any],
+        kind: str,
+    ) -> list[dict[str, Any]]:
+        if kind not in {
+            "goal",
+            "corner",
+            "shot",
+            "shot_on_target",
+            "shot_off_target",
+            "penalty",
+            "offside",
+        }:
+            return []
+
+        try:
+            minute = int(item.get("minute"))
+        except (TypeError, ValueError):
+            return []
+        try:
+            extra = int(item.get("extra_minute") or 0)
+        except (TypeError, ValueError):
+            extra = 0
+        event_second = (minute + extra) * 60
+
+        anchor = spatial_data.get("anchor")
+        if not isinstance(anchor, dict):
+            path = spatial_data.get("ball_path")
+            anchor = path.get("start") if isinstance(path, dict) else None
+
+        candidates: list[tuple[int, dict[str, Any], int, float]] = []
+        for index, (point, seconds) in enumerate(coordinate_stream):
+            time_delta = abs(seconds - event_second)
+            if time_delta > 90:
+                continue
+            distance = 0.0
+            if isinstance(anchor, dict):
+                try:
+                    dx = float(point["x"]) - float(anchor["x"])
+                    dy = float(point["y"]) - float(anchor["y"])
+                    distance = (dx * dx + dy * dy) ** 0.5
+                except (TypeError, ValueError, KeyError):
+                    distance = 0.0
+            score = time_delta + distance * 1.8
+            candidates.append((index, point, seconds, score))
+
+        if not candidates:
+            return []
+
+        center_index, _, center_second, _ = min(
+            candidates,
+            key=lambda row: row[3],
+        )
+        center_period = coordinate_stream[center_index][0].get("period_id")
+
+        selected: list[dict[str, Any]] = []
+        start_index = max(0, center_index - 6)
+        end_index = min(len(coordinate_stream), center_index + 8)
+        for point, seconds in coordinate_stream[start_index:end_index]:
+            if point.get("period_id") != center_period:
+                continue
+            if abs(seconds - center_second) > 28:
+                continue
+            selected.append(
+                {
+                    "x": round(float(point["x"]), 3),
+                    "y": round(float(point["y"]), 3),
+                    "timer": point.get("timer"),
+                    "period_id": point.get("period_id"),
+                }
+            )
+
+        return selected
+
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
         player = player_for(item)
@@ -523,7 +669,19 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             seen.add(dedupe_key)
 
             item["source_kind"] = "event" if source_kind == "events" else "timeline"
-            item["spatial"] = spatial(item, kind)
+            spatial_data = spatial(item, kind)
+            coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            if coordinate_track:
+                spatial_data["source"] = "stored"
+                spatial_data["ball_track"] = coordinate_track
+                spatial_data["anchor"] = coordinate_track[0]
+                spatial_data["ball_path"] = {
+                    "start": coordinate_track[0],
+                    "end": coordinate_track[-1],
+                }
+                item["ball_track"] = coordinate_track
+                item["ball_path"] = spatial_data["ball_path"]
+            item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
                 if current is not None:
