@@ -98,6 +98,20 @@ class FakeServingRepository:
                     "player_positions": [],
                     "detail": {},
                 }
+,
+                {
+                    "id": 9003,
+                    "minute": 53,
+                    "extra_minute": None,
+                    "type": "Corner",
+                    "text": "Second Half Corner",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "is_home": True,
+                    "ball_path": None,
+                    "player_positions": [],
+                    "detail": {},
+                }
             ],
             "timeline": [],
             "ball_coordinates": [
@@ -195,6 +209,15 @@ class GoodGameWebTests(unittest.TestCase):
         # Stored corner starts near the right goal line and must remain in that
         # same attacking end rather than traversing across midfield.
         self.assertGreater(corner["ball_path"]["end"]["x"], 50.0)
+
+        second_half_corner = next(
+            event["spatial"]
+            for event in body["selectable_events"]
+            if event.get("id") == 9003
+        )
+        self.assertEqual(second_half_corner["source"], "inferred")
+        self.assertLess(second_half_corner["ball_path"]["start"]["x"], 50.0)
+        self.assertLess(second_half_corner["ball_path"]["end"]["x"], 50.0)
 
     def test_visualization_is_derived_from_same_game_view(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
