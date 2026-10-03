@@ -549,29 +549,63 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             on_target: bool,
             max_goal_distance: float,
         ) -> list[tuple[dict[str, Any], int]]:
-            """Return only the attacking phase of the shot.
+            """Return the shot flight, starting at the shot-taking point.
 
-            Pick the local run that approaches the correct goal and stop at the
-            closest approach. Samples after that point represent a save,
-            rebound, clearance, or the next phase and must not be drawn as part
-            of the shot trajectory.
+            The selected event represents the shot action itself. The stored
+            traversal must therefore begin at the launch coordinate and move
+            forward in provider time until the terminal save/miss/goal point.
+            Do not render the possession/build-up before the shot.
             """
-            viable_indices: list[int] = []
-            for index, (point, _) in enumerate(compact_rows):
-                # Never treat a centre-spot restart as part of a shot.
-                if abs(float(point["x"]) - 50.0) <= 3.0 and abs(float(point["y"]) - 50.0) <= 6.0:
-                    continue
-                if distance_to_target_goal(point) <= max_goal_distance:
-                    viable_indices.append(index)
-
-            if not viable_indices:
+            if len(compact_rows) < 2:
                 return []
 
+            # Build candidate forward runs. A shot launch is the point directly
+            # before a meaningful goalward movement. From there, keep following
+            # provider samples while the ball continues toward the correct goal
+            # and stop at the local closest approach (save/miss/goal).
             candidates: list[tuple[float, int, int]] = []
 
-            for end_index in viable_indices:
+            for launch_index in range(0, len(compact_rows) - 1):
+                launch_point, launch_second = compact_rows[launch_index]
+                next_point, next_second = compact_rows[launch_index + 1]
+
+                if next_second - launch_second > 16:
+                    continue
+
+                launch_distance = distance_to_target_goal(launch_point)
+                next_distance = distance_to_target_goal(next_point)
+                first_progress = launch_distance - next_distance
+
+                # Require a decisive initial movement toward goal. This keeps
+                # the pre-shot possession phase out of the rendered path.
+                if first_progress < 3.0:
+                    continue
+
+                end_index = launch_index + 1
+                previous_distance = next_distance
+
+                for current_index in range(launch_index + 2, len(compact_rows)):
+                    point, seconds = compact_rows[current_index]
+                    previous_seconds = compact_rows[current_index - 1][1]
+                    if seconds - previous_seconds > 16:
+                        break
+
+                    current_distance = distance_to_target_goal(point)
+
+                    # Once the ball clearly moves away from goal, the save /
+                    # rebound / clearance phase has begun. Stop before it.
+                    if current_distance > previous_distance + 3.0:
+                        break
+
+                    end_index = current_index
+                    previous_distance = current_distance
+
                 end_point, end_second = compact_rows[end_index]
                 end_distance = distance_to_target_goal(end_point)
+
+                # Endpoint must plausibly reach the goal zone for the event.
+                if end_distance > max_goal_distance:
+                    continue
 
                 if on_target:
                     center_distance = goal_center_distance(end_point)
@@ -580,81 +614,51 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 else:
                     center_distance = 0.0
 
-                # Do not use this endpoint if the immediately following sample
-                # gets materially closer to goal; that means the shot has not
-                # reached its terminal point yet.
-                if end_index + 1 < len(compact_rows):
-                    next_point, next_second = compact_rows[end_index + 1]
-                    if next_second - end_second <= 16:
-                        next_distance = distance_to_target_goal(next_point)
-                        if next_distance < end_distance - 2.0:
-                            continue
-
-                best_start_index: int | None = None
-                best_progress = 0.0
-
-                for start_index in range(max(0, end_index - 6), end_index):
-                    start_point, start_second = compact_rows[start_index]
-                    if end_second - start_second > 35:
-                        continue
-
-                    segment_rows = compact_rows[start_index : end_index + 1]
-                    if any(
-                        segment_rows[i][1] - segment_rows[i - 1][1] > 16
-                        for i in range(1, len(segment_rows))
-                    ):
-                        continue
-
-                    # Every meaningful step should trend goalward. Small
-                    # sideways/noisy moves are allowed, but once the ball moves
-                    # clearly away from goal the shot phase has ended.
-                    distances = [distance_to_target_goal(row[0]) for row in segment_rows]
-                    if any(
-                        distances[i] > distances[i - 1] + 6.0
-                        for i in range(1, len(distances))
-                    ):
-                        continue
-
-                    progress = distances[0] - distances[-1]
-                    if progress > best_progress:
-                        best_progress = progress
-                        best_start_index = start_index
-
-                if best_start_index is None or best_progress < 3.0:
+                total_progress = launch_distance - end_distance
+                if total_progress < 6.0:
                     continue
 
-                # Lower score is better: finish close to goal / goal mouth,
-                # reward strong goalward progress, and weakly prefer points
-                # close to the event's timer window.
+                # Favor a strong, compact shot movement whose terminal sample
+                # is near the correct goal and temporally close to the event.
+                duration = max(1, end_second - launch_second)
                 score = (
                     end_distance * 4.0
                     + center_distance * (1.7 if on_target else 0.0)
-                    + time_score(end_second) * 0.25
-                    - best_progress * 0.35
+                    + time_score(launch_second) * 0.2
+                    + duration * 0.08
+                    - total_progress * 0.45
                 )
-                candidates.append((score, best_start_index, end_index))
+                candidates.append((score, launch_index, end_index))
 
             if candidates:
-                _, start_index, end_index = min(candidates, key=lambda row: row[0])
-                return compact_rows[start_index : end_index + 1]
+                _, launch_index, end_index = min(candidates, key=lambda row: row[0])
+                return compact_rows[launch_index : end_index + 1]
 
-            # Sparse provider fallback for shots only: if we have just an
-            # origin and one terminal sample, keep those two points, but still
-            # stop at the closest approach (never include a rebound after it).
-            if kind in {"shot", "shot_on_target", "shot_off_target"}:
-                for end_index in sorted(
-                    viable_indices,
-                    key=lambda index: distance_to_target_goal(compact_rows[index][0]),
-                ):
-                    end_point, end_second = compact_rows[end_index]
-                    end_distance = distance_to_target_goal(end_point)
-                    for start_index in range(end_index - 1, -1, -1):
-                        start_point, start_second = compact_rows[start_index]
-                        if end_second - start_second > 35:
+            # Sparse provider fallback: choose the closest forward pair that
+            # still clearly moves toward the correct goal. The first point is
+            # always the shot-taking point; never return a pre-shot run.
+            if kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
+                sparse: list[tuple[float, int, int]] = []
+                for launch_index in range(0, len(compact_rows) - 1):
+                    launch_point, launch_second = compact_rows[launch_index]
+                    for end_index in range(launch_index + 1, min(len(compact_rows), launch_index + 4)):
+                        end_point, end_second = compact_rows[end_index]
+                        if end_second - launch_second > 24:
                             break
-                        progress = distance_to_target_goal(start_point) - end_distance
-                        if progress >= 8.0:
-                            return [compact_rows[start_index], compact_rows[end_index]]
+                        end_distance = distance_to_target_goal(end_point)
+                        progress = distance_to_target_goal(launch_point) - end_distance
+                        if progress < 8.0 or end_distance > max_goal_distance:
+                            continue
+                        if on_target and goal_center_distance(end_point) > GOAL_HALF_WIDTH_PERCENT + 8.0:
+                            continue
+                        sparse.append((
+                            end_distance * 4.0 + time_score(launch_second) * 0.2 - progress * 0.4,
+                            launch_index,
+                            end_index,
+                        ))
+                if sparse:
+                    _, launch_index, end_index = min(sparse, key=lambda row: row[0])
+                    return compact_rows[launch_index : end_index + 1]
 
             return []
 
