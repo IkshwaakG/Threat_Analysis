@@ -275,6 +275,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if player.get("player_id") is not None
     }
 
+    # 105 x 68 m reference pitch. IFAB goal opening is 7.32 m wide.
+    GOAL_HALF_WIDTH_PERCENT = (7.32 / 68.0) * 50.0
+    PENALTY_SPOT_FROM_GOAL_PERCENT = (11.0 / 105.0) * 100.0
+    PENALTY_SPOT_RIGHT_X = 100.0 - PENALTY_SPOT_FROM_GOAL_PERCENT
+    PENALTY_SPOT_LEFT_X = PENALTY_SPOT_FROM_GOAL_PERCENT
+
     def category(item: dict[str, Any]) -> str:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
         if "substitution" in value:
@@ -521,8 +527,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             endpoint_candidates = [
                 (index, point, seconds)
                 for index, (point, seconds) in enumerate(compact_rows)
-                if goal_line_distance(point) <= 16.0
-                and goal_center_distance(point) <= 9.0
+                if goal_line_distance(point) <= 12.0
+                and goal_center_distance(point) <= GOAL_HALF_WIDTH_PERCENT + 1.5
             ]
             if not endpoint_candidates:
                 return []
@@ -631,20 +637,25 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     + int(item.get("sort_order") or 0)
                 )
                 if kind == "goal":
-                    end = {"x": attacking_x(team_side, 99.2, 0.8), "y": 50.0}
+                    end = {"x": attacking_x(team_side, 100.0, 0.0), "y": 50.0}
                 elif kind == "corner":
                     box_y = 43.0 if float(start_point.get("y") or 50.0) < 50.0 else 57.0
                     end = {"x": attacking_x(team_side, 87.0, 13.0), "y": box_y}
                 elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
                     if kind == "shot_off_target":
-                        miss_offsets = (-10.0, -6.0, 6.0, 10.0)
+                        miss_offsets = (
+                            -(GOAL_HALF_WIDTH_PERCENT + 3.2),
+                            -(GOAL_HALF_WIDTH_PERCENT + 1.8),
+                            GOAL_HALF_WIDTH_PERCENT + 1.8,
+                            GOAL_HALF_WIDTH_PERCENT + 3.2,
+                        )
                         end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
                     elif kind == "shot_on_target":
-                        target_offsets = (-5.0, -2.0, 2.0, 5.0)
+                        target_offsets = (-4.0, -2.0, 2.0, 4.0)
                         end_y = 50.0 + target_offsets[seed % len(target_offsets)]
                     else:
                         end_y = 50.0
-                    end = {"x": attacking_x(team_side, 99.2, 0.8), "y": end_y}
+                    end = {"x": attacking_x(team_side, 100.0, 0.0), "y": end_y}
 
             normalized_path = (
                 {"start": start_point, "end": end if isinstance(end, dict) else None}
@@ -662,8 +673,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if kind == "goal":
             # Until provider ball coordinates are available, keep this deliberately
             # simple and explicit: penalty spot -> attacking goal.
-            start = {"x": attacking_x(team_side, 88.0, 12.0), "y": 50.0}
-            end = {"x": attacking_x(team_side, 99.2, 0.8), "y": 50.0}
+            start = {
+                "x": attacking_x(team_side, PENALTY_SPOT_RIGHT_X, PENALTY_SPOT_LEFT_X),
+                "y": 50.0,
+            }
+            end = {"x": attacking_x(team_side, 100.0, 0.0), "y": 50.0}
             return {
                 "kind": kind,
                 "source": "inferred",
@@ -694,7 +708,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             }
 
         if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
-            start_x = 88.0 if kind == "penalty" else 78.0
+            start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
             start = {
                 "x": attacking_x(team_side, start_x, 100.0 - start_x),
                 "y": player_anchor["y"] if player_anchor else 50.0,
@@ -708,15 +722,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     + int(item.get("minute") or 0)
                     + int(item.get("sort_order") or 0)
                 )
-                miss_offsets = (-12.0, -8.0, 8.0, 12.0)
+                miss_offsets = (
+                    -(GOAL_HALF_WIDTH_PERCENT + 3.2),
+                    -(GOAL_HALF_WIDTH_PERCENT + 1.8),
+                    GOAL_HALF_WIDTH_PERCENT + 1.8,
+                    GOAL_HALF_WIDTH_PERCENT + 3.2,
+                )
                 end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
             elif kind == "shot_on_target":
                 seed = int(item.get("id") or item.get("minute") or 0)
-                target_offsets = (-5.0, -2.0, 2.0, 5.0)
+                target_offsets = (-4.0, -2.0, 2.0, 4.0)
                 end_y = 50.0 + target_offsets[seed % len(target_offsets)]
             else:
                 end_y = 50.0
-            end = {"x": attacking_x(team_side, 99.2, 0.8), "y": end_y}
+            end = {"x": attacking_x(team_side, 100.0, 0.0), "y": end_y}
             return {
                 "kind": kind,
                 "source": "inferred",
