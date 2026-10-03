@@ -129,14 +129,34 @@ def _coordinate_pair(value: Any) -> tuple[float, float] | None:
             return None
 
     if isinstance(value, dict):
-        if "x" in value and "y" in value:
-            try:
-                x = float(value["x"])
-                y = float(value["y"])
-            except (TypeError, ValueError):
-                return None
-        else:
-            for key in ("coordinates", "location", "position", "point"):
+        coordinate_keys = (
+            ("x", "y"),
+            ("X", "Y"),
+            ("lng", "lat"),
+            ("longitude", "latitude"),
+        )
+        found = False
+        for x_key, y_key in coordinate_keys:
+            if x_key in value and y_key in value:
+                try:
+                    x = float(value[x_key])
+                    y = float(value[y_key])
+                    found = True
+                    break
+                except (TypeError, ValueError):
+                    return None
+        if not found:
+            for key in (
+                "coordinates",
+                "coordinate",
+                "location",
+                "position",
+                "point",
+                "start",
+                "end",
+                "ball",
+                "data",
+            ):
                 if key in value:
                     pair = _coordinate_pair(value.get(key))
                     if pair is not None:
@@ -164,50 +184,6 @@ def _coordinate_pair(value: Any) -> tuple[float, float] | None:
     )
 
 
-def _ball_coordinate_points(value: Any) -> list[dict[str, Any]]:
-    """Extract pitch-ready x/y points from stored provider ball-coordinate JSON."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return []
-
-    points: list[dict[str, Any]] = []
-
-    def visit(item: Any) -> None:
-        if isinstance(item, list):
-            for current in item:
-                visit(current)
-            return
-        if not isinstance(item, dict):
-            return
-
-        pair = _coordinate_pair(item)
-        if pair is None:
-            for key in ("coordinates", "location", "position", "point"):
-                pair = _coordinate_pair(item.get(key))
-                if pair is not None:
-                    break
-
-        if pair is not None:
-            points.append(
-                {
-                    "x": pair[0],
-                    "y": pair[1],
-                    "timer": item.get("timer") or item.get("minute") or item.get("time"),
-                    "period_id": item.get("period_id") or item.get("period"),
-                }
-            )
-            return
-
-        for nested in item.values():
-            if isinstance(nested, (list, dict)):
-                visit(nested)
-
-    visit(value)
-    return points
-
-
 def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict[str, Any] | None:
     if isinstance(raw, str):
         try:
@@ -222,11 +198,19 @@ def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict
     start = None
     for candidate in (
         raw.get("coordinates"),
+        raw.get("coordinate"),
         raw.get("location"),
+        raw.get("position"),
+        raw.get("start"),
         raw.get("start_coordinates"),
         raw.get("start_location"),
+        raw.get("ball_coordinates"),
+        raw.get("ballCoordinates"),
         shot.get("coordinates"),
+        shot.get("coordinate"),
         shot.get("location"),
+        shot.get("position"),
+        shot.get("start"),
     ):
         start = _coordinate_pair(candidate)
         if start is not None:
@@ -234,13 +218,18 @@ def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict
 
     end = None
     for candidate in (
+        raw.get("end"),
         raw.get("end_coordinates"),
         raw.get("end_location"),
         raw.get("goal_coordinates"),
         raw.get("target_coordinates"),
+        raw.get("target"),
+        shot.get("end"),
         shot.get("end_coordinates"),
         shot.get("end_location"),
         shot.get("goal_coordinates"),
+        shot.get("target_coordinates"),
+        shot.get("target"),
     ):
         end = _coordinate_pair(candidate)
         if end is not None:
@@ -819,7 +808,11 @@ class BigQueryServingRepository:
               LIMIT 1
             ),
             fixture_advanced AS (
-              SELECT *
+              SELECT
+                pressure,
+                xg_fixture,
+                trends,
+                expected_lineups
               FROM {self._table("fixture_advanced")}
               WHERE fixture_id = @fixture_id
               LIMIT 1
@@ -993,6 +986,20 @@ class BigQueryServingRepository:
                AND p.season_id = s.season_id
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE s.fixture_id = @fixture_id
+            ),
+            ball_coordinates AS (
+              SELECT
+                coordinate_id,
+                period_id,
+                timer,
+                LEAST(100.0, GREATEST(0.0,
+                  IF(ABS(x) <= 1.5, x * 100.0, x)
+                )) AS x,
+                LEAST(100.0, GREATEST(0.0,
+                  IF(ABS(y) <= 1.5, y * 100.0, y)
+                )) AS y
+              FROM {self._table("fixture_ball_coordinates")}
+              WHERE fixture_id = @fixture_id
             )
             SELECT
               'fixture' AS row_kind,
@@ -1203,13 +1210,25 @@ class BigQueryServingRepository:
             SELECT
               'advanced' AS row_kind,
               TO_JSON_STRING(STRUCT(
-                a.ball_coordinates,
                 a.pressure,
                 a.xg_fixture,
                 a.trends,
                 a.expected_lineups
               )) AS payload
             FROM fixture_advanced a
+
+            UNION ALL
+
+            SELECT
+              'ball_coordinate' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                b.coordinate_id AS id,
+                b.period_id,
+                b.timer,
+                b.x,
+                b.y
+              )) AS payload
+            FROM ball_coordinates b
 
             UNION ALL
 
@@ -1242,6 +1261,7 @@ class BigQueryServingRepository:
         sidelined: list[dict[str, Any]] = []
         raw_fact: dict[str, Any] = {}
         advanced: dict[str, Any] = {}
+        ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
 
         for row in rows:
@@ -1316,6 +1336,8 @@ class BigQueryServingRepository:
                 raw_fact = data
             elif kind == "advanced":
                 advanced = data
+            elif kind == "ball_coordinate":
+                ball_coordinates.append(data)
             elif kind == "standing":
                 standings.append(data)
 
@@ -1422,6 +1444,22 @@ class BigQueryServingRepository:
             )
         )
 
+        def _timer_seconds(item: dict[str, Any]) -> tuple[int, int]:
+            timer = str(item.get("timer") or "")
+            try:
+                minute, second = timer.split(":", 1)
+                return int(minute), int(second)
+            except (TypeError, ValueError):
+                return 999, 999
+
+        ball_coordinates.sort(
+            key=lambda item: (
+                item.get("period_id") if item.get("period_id") is not None else 999999999,
+                *_timer_seconds(item),
+                item.get("id") if item.get("id") is not None else 0,
+            )
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
@@ -1435,12 +1473,12 @@ class BigQueryServingRepository:
             "weather": weather,
             "sidelined": sidelined,
             "raw_fact": raw_fact,
-            "standings": standings,
-            "ball_coordinates": _ball_coordinate_points(advanced.get("ball_coordinates")),
+            "ball_coordinates": ball_coordinates,
             "pressure": advanced.get("pressure"),
             "xg_fixture": advanced.get("xg_fixture"),
             "trends": advanced.get("trends"),
             "expected_lineups": advanced.get("expected_lineups"),
+            "standings": standings,
             "source": "bigquery",
         }
 
