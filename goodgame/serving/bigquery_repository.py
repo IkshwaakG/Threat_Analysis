@@ -129,14 +129,34 @@ def _coordinate_pair(value: Any) -> tuple[float, float] | None:
             return None
 
     if isinstance(value, dict):
-        if "x" in value and "y" in value:
-            try:
-                x = float(value["x"])
-                y = float(value["y"])
-            except (TypeError, ValueError):
-                return None
-        else:
-            for key in ("coordinates", "location", "position", "point"):
+        coordinate_keys = (
+            ("x", "y"),
+            ("X", "Y"),
+            ("lng", "lat"),
+            ("longitude", "latitude"),
+        )
+        found = False
+        for x_key, y_key in coordinate_keys:
+            if x_key in value and y_key in value:
+                try:
+                    x = float(value[x_key])
+                    y = float(value[y_key])
+                    found = True
+                    break
+                except (TypeError, ValueError):
+                    return None
+        if not found:
+            for key in (
+                "coordinates",
+                "coordinate",
+                "location",
+                "position",
+                "point",
+                "start",
+                "end",
+                "ball",
+                "data",
+            ):
                 if key in value:
                     pair = _coordinate_pair(value.get(key))
                     if pair is not None:
@@ -178,11 +198,19 @@ def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict
     start = None
     for candidate in (
         raw.get("coordinates"),
+        raw.get("coordinate"),
         raw.get("location"),
+        raw.get("position"),
+        raw.get("start"),
         raw.get("start_coordinates"),
         raw.get("start_location"),
+        raw.get("ball_coordinates"),
+        raw.get("ballCoordinates"),
         shot.get("coordinates"),
+        shot.get("coordinate"),
         shot.get("location"),
+        shot.get("position"),
+        shot.get("start"),
     ):
         start = _coordinate_pair(candidate)
         if start is not None:
@@ -190,13 +218,18 @@ def _event_ball_path(raw: Any, *, is_home: bool | None, event_type: str) -> dict
 
     end = None
     for candidate in (
+        raw.get("end"),
         raw.get("end_coordinates"),
         raw.get("end_location"),
         raw.get("goal_coordinates"),
         raw.get("target_coordinates"),
+        raw.get("target"),
+        shot.get("end"),
         shot.get("end_coordinates"),
         shot.get("end_location"),
         shot.get("goal_coordinates"),
+        shot.get("target_coordinates"),
+        shot.get("target"),
     ):
         end = _coordinate_pair(candidate)
         if end is not None:
