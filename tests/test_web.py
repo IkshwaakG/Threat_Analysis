@@ -322,3 +322,19 @@ def test_shot_track_stops_before_rebound():
     terminal = min(range(len(distances)), key=distances.__getitem__)
     assert terminal == 2
     assert distances[3] > distances[2]
+
+
+def test_shot_traversal_starts_at_launch_and_moves_forward():
+    # A stored shot trajectory begins at the coordinate where the shot is
+    # launched and continues forward to the terminal save/miss/goal point.
+    target_x = 100.0
+    xs = [42.0, 44.0, 71.0, 93.0, 72.0]
+    distances = [abs(x - target_x) for x in xs]
+
+    # 44 -> 71 is the first decisive goalward movement, so 44 is launch.
+    launch_index = 1
+    assert distances[launch_index] - distances[launch_index + 1] >= 3.0
+
+    # 93 is the local closest approach; 72 is post-save/rebound movement.
+    assert distances[3] < distances[2]
+    assert distances[4] > distances[3]
