@@ -367,11 +367,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             minute = int(item.get("minute") or 0)
         except (TypeError, ValueError):
             minute = 0
-        if minute < 45:
+        # 45' and 90' are regulation stoppage-time anchors, not the next
+        # period. Sportmonks carries added time separately in extra_minute.
+        if minute <= 45:
             return 1
-        if minute < 90:
+        if minute <= 90:
             return 2
-        if minute < 105:
+        if minute <= 105:
             return 3
         return 4
 
@@ -850,6 +852,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             seen.add(dedupe_key)
 
             item["source_kind"] = "event" if source_kind == "events" else "timeline"
+
+            # Normalize ownership once so every consumer (Spatial, timeline
+            # crest, filters, goal/shot/corner rendering) sees the same team.
+            team_side = side(item)
+            if team_side == "home":
+                item["is_home"] = True
+            elif team_side == "away":
+                item["is_home"] = False
+
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
             if coordinate_track:
