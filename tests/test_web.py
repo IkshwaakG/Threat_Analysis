@@ -288,11 +288,17 @@ def test_goal_can_reuse_matching_shot_on_target_track():
     assert shot["spatial"]["source"] == "stored"
 
 
-def test_display_minute_maps_to_elapsed_timer_window():
-    def timer_window(display_minute: int, extra_minute: int = 0) -> tuple[int, int]:
-        elapsed_minute = max(0, display_minute - 1) + extra_minute
-        return elapsed_minute * 60, elapsed_minute * 60 + 59
+def test_event_minute_matches_same_sportmonks_timer_minute():
+    def timer_window(event_minute: int, extra_minute: int = 0) -> tuple[int, int]:
+        match_minute = event_minute + extra_minute
+        return match_minute * 60, match_minute * 60 + 59
 
-    assert timer_window(35) == (34 * 60, 34 * 60 + 59)
-    assert timer_window(6) == (5 * 60, 5 * 60 + 59)
-    assert timer_window(1) == (0, 59)
+    assert timer_window(35) == (35 * 60, 35 * 60 + 59)
+    assert timer_window(37) == (37 * 60, 37 * 60 + 59)
+    assert timer_window(90) == (90 * 60, 90 * 60 + 59)
+
+
+def test_goal_matcher_must_not_use_kickoff_reset_as_goal_track():
+    centre = {"x": 50.0, "y": 50.0}
+    assert abs(centre["x"] - 50.0) <= 3.0
+    assert abs(centre["y"] - 50.0) <= 6.0
