@@ -46,6 +46,11 @@ class Event:
     away_score: int | None = None
     incident_class: str | None = None
     id: int | str | None = None
+    extra_minute: int | None = None
+    player_id: int | None = None
+    related_player_id: int | None = None
+    team_id: int | None = None
+    rescinded: bool = False
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @classmethod
