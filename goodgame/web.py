@@ -466,13 +466,19 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        # Sportmonks event.minute and ballCoordinates.timer use the same
-        # match-time scale: minute=37 is matched against timer 37:00-37:59.
-        # extra_minute remains a separate stoppage-time field.
-        event_minute = minute + extra
+        # Sportmonks event labels and ball-coordinate timers can differ by
+        # one displayed minute in real fixtures. Evaluate both plausible timer
+        # windows and let event geometry decide which one belongs to the action.
+        display_minute = minute + extra
+        candidate_minutes = sorted({
+            max(0, display_minute - 1),
+            display_minute,
+        })
+        candidate_windows = [
+            (candidate * 60, candidate * 60 + 59)
+            for candidate in candidate_minutes
+        ]
         event_period_id = item.get("period_id")
-        minute_start = event_minute * 60
-        minute_end = minute_start + 59
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
 
@@ -506,12 +512,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if not same_period:
             same_period = coordinate_stream
 
-        # Sportmonks events expose minute granularity while ballCoordinates
-        # expose seconds. Keep a narrow pad around the selected event timer window.
+        # Search both plausible timer windows, with a small boundary pad.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if minute_start - 12 <= seconds <= minute_end + 12
+            if any(start - 12 <= seconds <= end + 12 for start, end in candidate_windows)
         ]
         if not time_candidates:
             return []
@@ -532,9 +537,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return []
 
         def time_score(seconds: int) -> float:
-            if minute_start <= seconds <= minute_end:
-                return 0.0
-            return min(abs(seconds - minute_start), abs(seconds - minute_end))
+            best = float("inf")
+            for start, end in candidate_windows:
+                if start <= seconds <= end:
+                    return 0.0
+                best = min(best, abs(seconds - start), abs(seconds - end))
+            return best
 
         def build_approach_segment(
             *,
@@ -578,17 +586,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
                 best_start_index: int | None = None
                 best_progress = 0.0
-                for start_index in range(max(0, end_index - 4), end_index):
+                for start_index in range(max(0, end_index - 5), end_index):
                     start_point, start_second = compact_rows[start_index]
-                    if end_second - start_second > 20:
+                    if end_second - start_second > 28:
                         continue
 
-                    # Reject segments containing a large provider sampling gap;
-                    # otherwise a missing goal sequence can be joined to a
-                    # later kickoff/reset and look like real tracking.
                     segment_rows = compact_rows[start_index : end_index + 1]
                     if any(
-                        segment_rows[i][1] - segment_rows[i - 1][1] > 15
+                        segment_rows[i][1] - segment_rows[i - 1][1] > 16
                         for i in range(1, len(segment_rows))
                     ):
                         continue
@@ -597,13 +602,22 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         best_progress = progress
                         best_start_index = start_index
 
-                # A shot trajectory should actually move toward the target
-                # goal. Requiring modest progress avoids selecting unrelated
-                # possession samples from the same minute.
-                if best_start_index is None or best_progress < 3.0:
-                    continue
+                if best_start_index is not None and best_progress >= 3.0:
+                    return compact_rows[best_start_index : end_index + 1]
 
-                return compact_rows[best_start_index : end_index + 1]
+                # Some provider streams only expose the terminal shot sample
+                # plus a nearby prior ball location. For shots (not goals),
+                # allow the nearest prior distinct sample when it still moves
+                # materially toward the correct goal and is temporally close.
+                if kind in {"shot", "shot_on_target", "shot_off_target"}:
+                    for start_index in range(end_index - 1, -1, -1):
+                        start_point, start_second = compact_rows[start_index]
+                        gap = end_second - start_second
+                        if gap > 35:
+                            break
+                        progress = distance_to_target_goal(start_point) - end_distance
+                        if progress >= 8.0:
+                            return [compact_rows[start_index], compact_rows[end_index]]
 
             return []
 
@@ -667,7 +681,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     compact_rows,
                     key=lambda row: (
                         time_score(row[1]),
-                        abs(row[1] - (minute_start + 30)),
+                        min(
+                            abs(row[1] - (start + 30))
+                            for start, _ in candidate_windows
+                        ),
                     ),
                 )
             ]
