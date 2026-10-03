@@ -18,6 +18,8 @@ class ServingArchitectureTests(unittest.TestCase):
         self.assertNotIn("football_raw", serving)
         self.assertIn('self._table("fixture_ball_coordinates")', serving)
         self.assertIn('self._table("fixture_advanced")', serving)
+        self.assertIn('self._table("fixture_videos")', serving)
+        self.assertIn('"video_reference": video_reference', serving)
         self.assertIn('self._table("fixture_participants")', serving)
         self.assertIn('self._table("fixture_lineups")', serving)
         self.assertIn('"ball_coordinates": ball_coordinates', serving)
