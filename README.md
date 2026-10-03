@@ -393,3 +393,36 @@ DATA_MODE=demo uvicorn goodgame.web:app --port 8000
 
 A real demo snapshot can still be generated from GCP using
 `scripts/export_demo_snapshot.py`, then verified with the same command.
+
+
+## Multi-league and All-In serving contract
+
+Competition and season selectors are driven by normalized fixtures already in
+`football_core`.
+
+Team options are derived from fixture participants for the selected
+competition/season. Player options are derived from fixture lineups for the same
+scope. Master team/player tables provide names, images, positions and profile
+metadata, with fixture data as the membership source.
+
+The game endpoint remains one bundled DB read:
+
+```text
+GET /api/games/{fixture_id}
+```
+
+When available, the same response includes:
+
+```text
+ball_coordinates
+pressure
+xg_fixture
+trends
+expected_lineups
+```
+
+Ball coordinates come from the normalized
+`football_core.fixture_ball_coordinates` table. Pressure, fixture xG, trends
+and expected lineups come from `football_core.fixture_advanced`.
+
+The web service never calls Sportmonks and never reads `football_raw`.

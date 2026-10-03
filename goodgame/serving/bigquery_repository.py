@@ -614,12 +614,33 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_teams(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        """List teams that participate in fixtures for this competition/season."""
         rows = self._query(
             f"""
-            SELECT DISTINCT team_id AS id, name, short_code, image_path
-            FROM {self._table("teams")}
-            WHERE season_id = @season_id
-              AND (@competition_id IS NULL OR league_id = @competition_id)
+            WITH scoped_teams AS (
+              SELECT DISTINCT
+                fp.team_id,
+                f.league_id,
+                f.season_id
+              FROM {self._table("fixture_participants")} fp
+              JOIN {self._table("fixtures")} f USING (fixture_id)
+              WHERE f.season_id = @season_id
+                AND (@competition_id IS NULL OR f.league_id = @competition_id)
+            )
+            SELECT
+              st.team_id AS id,
+              COALESCE(t.name, CONCAT('Team ', CAST(st.team_id AS STRING))) AS name,
+              t.short_code,
+              t.image_path
+            FROM scoped_teams st
+            LEFT JOIN {self._table("teams")} t
+              ON t.team_id = st.team_id
+             AND t.league_id = st.league_id
+             AND t.season_id = st.season_id
+            QUALIFY ROW_NUMBER() OVER (
+              PARTITION BY st.team_id
+              ORDER BY t.updated_at DESC
+            ) = 1
             ORDER BY name
             """,
             [
@@ -630,16 +651,41 @@ class BigQueryServingRepository:
         return [dict(row.items()) for row in rows]
 
     def list_players(self, season_id: int, competition_id: int | None = None) -> list[dict[str, Any]]:
+        """List players present in fixture lineups for this competition/season."""
         rows = self._query(
             f"""
-            SELECT DISTINCT
-              player_id AS id,
-              COALESCE(display_name, name, common_name) AS name,
-              position_id,
-              image_path
-            FROM {self._table("players")}
-            WHERE season_id = @season_id
-              AND (@competition_id IS NULL OR league_id = @competition_id)
+            WITH scoped_players AS (
+              SELECT
+                fl.player_id,
+                ANY_VALUE(fl.player_name HAVING MAX fl.updated_at) AS lineup_name,
+                f.league_id,
+                f.season_id
+              FROM {self._table("fixture_lineups")} fl
+              JOIN {self._table("fixtures")} f USING (fixture_id)
+              WHERE f.season_id = @season_id
+                AND (@competition_id IS NULL OR f.league_id = @competition_id)
+              GROUP BY fl.player_id, f.league_id, f.season_id
+            )
+            SELECT
+              sp.player_id AS id,
+              COALESCE(
+                p.display_name,
+                p.name,
+                p.common_name,
+                sp.lineup_name,
+                CONCAT('Player ', CAST(sp.player_id AS STRING))
+              ) AS name,
+              p.position_id,
+              p.image_path
+            FROM scoped_players sp
+            LEFT JOIN {self._table("players")} p
+              ON p.player_id = sp.player_id
+             AND p.league_id = sp.league_id
+             AND p.season_id = sp.season_id
+            QUALIFY ROW_NUMBER() OVER (
+              PARTITION BY sp.player_id
+              ORDER BY p.updated_at DESC
+            ) = 1
             ORDER BY name
             """,
             [
@@ -758,6 +804,16 @@ class BigQueryServingRepository:
             fixture_facts AS (
               SELECT *
               FROM {self._table("fixture_facts")}
+              WHERE fixture_id = @fixture_id
+              LIMIT 1
+            ),
+            fixture_advanced AS (
+              SELECT
+                pressure,
+                xg_fixture,
+                trends,
+                expected_lineups
+              FROM {self._table("fixture_advanced")}
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
@@ -1152,6 +1208,18 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'advanced' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                a.pressure,
+                a.xg_fixture,
+                a.trends,
+                a.expected_lineups
+              )) AS payload
+            FROM fixture_advanced a
+
+            UNION ALL
+
+            SELECT
               'ball_coordinate' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 b.coordinate_id AS id,
@@ -1192,6 +1260,7 @@ class BigQueryServingRepository:
         weather: dict[str, Any] | None = None
         sidelined: list[dict[str, Any]] = []
         raw_fact: dict[str, Any] = {}
+        advanced: dict[str, Any] = {}
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
 
@@ -1265,6 +1334,8 @@ class BigQueryServingRepository:
                 sidelined.append(data)
             elif kind == "raw_fact":
                 raw_fact = data
+            elif kind == "advanced":
+                advanced = data
             elif kind == "ball_coordinate":
                 ball_coordinates.append(data)
             elif kind == "standing":
@@ -1403,6 +1474,10 @@ class BigQueryServingRepository:
             "sidelined": sidelined,
             "raw_fact": raw_fact,
             "ball_coordinates": ball_coordinates,
+            "pressure": advanced.get("pressure"),
+            "xg_fixture": advanced.get("xg_fixture"),
+            "trends": advanced.get("trends"),
+            "expected_lineups": advanced.get("expected_lineups"),
             "standings": standings,
             "source": "bigquery",
         }
