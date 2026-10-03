@@ -427,6 +427,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         spatial_data: dict[str, Any],
         kind: str,
     ) -> list[dict[str, Any]]:
+        """Return the provider ball samples nearest the selected event.
+
+        Sportmonks ballCoordinates are already pitch coordinates. Do not mirror
+        them by team/half. Match by period when available and by the event's
+        minute window, preserving provider order.
+        """
         if kind not in {
             "goal",
             "corner",
@@ -446,130 +452,71 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             extra = int(item.get("extra_minute") or 0)
         except (TypeError, ValueError):
             extra = 0
-        event_second = (minute + extra) * 60
-        team_side = side(item)
 
-        def team_attacks_right() -> bool:
-            # Screen orientation: home attacks right in the first half and
-            # left after half-time; away is the opposite.
-            second_half = minute >= 45 and minute < 90
-            if team_side == "home":
-                return not second_half
-            if team_side == "away":
-                return second_half
-            return True
+        event_minute = minute + extra
+        event_period_id = item.get("period_id")
 
-        def orient_point(point: dict[str, Any]) -> dict[str, Any]:
-            x = float(point["x"])
-            y = float(point["y"])
-            if not team_attacks_right():
-                x = 100.0 - x
-                y = 100.0 - y
+        def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
-                "x": round(x, 3),
-                "y": round(y, 3),
+                "x": round(float(point["x"]), 3),
+                "y": round(float(point["y"]), 3),
                 "timer": point.get("timer"),
                 "period_id": point.get("period_id"),
             }
 
-        candidates: list[tuple[int, dict[str, Any], int, float]] = []
-        for index, (point, seconds) in enumerate(coordinate_stream):
-            time_delta = abs(seconds - event_second)
-            if time_delta > 75:
-                continue
+        same_period = [
+            (point, seconds)
+            for point, seconds in coordinate_stream
+            if event_period_id is None or point.get("period_id") == event_period_id
+        ]
+        if not same_period:
+            same_period = coordinate_stream
 
-            x = float(point["x"])
-            y = float(point["y"])
+        # Prefer samples whose provider timer falls inside the selected event's
+        # minute. Timeline/events generally provide minute granularity, while
+        # ballCoordinates supply the seconds.
+        minute_start = event_minute * 60
+        minute_end = minute_start + 59
+        in_minute = [
+            (point, seconds)
+            for point, seconds in same_period
+            if minute_start <= seconds <= minute_end
+        ]
 
-            if kind == "corner":
-                spatial_penalty = min(
-                    ((x - 99.0) ** 2 + (y - 1.0) ** 2) ** 0.5,
-                    ((x - 99.0) ** 2 + (y - 99.0) ** 2) ** 0.5,
-                )
-                # A corner must originate right on the attacking goal line /
-                # touchline area. Strongly reject midfield points even if their
-                # timestamp is slightly closer.
-                if x < 84.0 or min(y, 100.0 - y) > 22.0:
-                    spatial_penalty += 45.0
-                score = time_delta * 0.65 + spatial_penalty * 3.4
-            elif kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
-                target_x = 88.0 if kind == "penalty" else 82.0
-                spatial_penalty = abs(x - target_x) * 0.65 + abs(y - 50.0) * 0.12
-                if x < 55.0:
-                    spatial_penalty += 30.0
-                score = time_delta * 0.9 + spatial_penalty
-            else:
-                score = float(time_delta)
-
-            candidates.append((index, point, seconds, score))
+        if in_minute:
+            candidates = in_minute
+        else:
+            # Fallback only when the event minute has no coordinate sample.
+            # Keep a narrow nearest-time window rather than applying football
+            # heuristics such as "corners must be near x=100".
+            candidates = sorted(
+                same_period,
+                key=lambda row: (
+                    abs(row[1] - minute_start),
+                    int(row[0].get("id") or 0),
+                ),
+            )[:8]
+            candidates.sort(key=lambda row: (row[1], int(row[0].get("id") or 0)))
 
         if not candidates:
             return []
 
-        center_index, center_point, center_second, _ = min(
-            candidates,
-            key=lambda row: row[3],
-        )
-        center_period = center_point.get("period_id")
+        # Preserve a short contiguous section of the provider stream. Do not
+        # spatially re-score, mirror, or invent intermediate player positions.
+        if len(candidates) > 12:
+            candidates = candidates[:12]
 
-        selected_raw: list[dict[str, Any]] = []
-        if kind == "corner":
-            # Start at the actual corner and follow only the immediate cross.
-            indexes = range(center_index, min(len(coordinate_stream), center_index + 9))
-            max_seconds = 22
-        elif kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
-            indexes = range(max(0, center_index - 1), min(len(coordinate_stream), center_index + 7))
-            max_seconds = 16
-        else:
-            indexes = range(max(0, center_index - 2), min(len(coordinate_stream), center_index + 5))
-            max_seconds = 18
-
-        for index in indexes:
-            point, seconds = coordinate_stream[index]
-            if point.get("period_id") != center_period:
-                continue
-            if abs(seconds - center_second) > max_seconds:
-                continue
-
-            x = float(point["x"])
-            if kind == "corner" and selected_raw and x < 72.0:
-                # Do not let a corner track wander into midfield because the
-                # next coordinate sample belongs to the next phase of play.
-                break
-            selected_raw.append(point)
-
-        if not selected_raw:
-            selected_raw = [center_point]
-
-        # Corner feeds are attacking-relative. Ensure the first point is the
-        # corner itself; if the chosen sample begins just after the kick, prepend
-        # the nearest true corner point from the same short time window.
-        if kind == "corner":
-            nearby_corner = min(
-                (
-                    row for row in candidates
-                    if float(row[1]["x"]) >= 88.0
-                    and min(float(row[1]["y"]), 100.0 - float(row[1]["y"])) <= 14.0
-                ),
-                key=lambda row: abs(row[2] - center_second),
-                default=None,
-            )
-            if nearby_corner is not None:
-                corner_point = nearby_corner[1]
-                if corner_point is not selected_raw[0]:
-                    selected_raw.insert(0, corner_point)
-
-        oriented = [orient_point(point) for point in selected_raw]
-
-        # Remove duplicate consecutive samples so the renderer does not show a
-        # thick stationary knot.
         compact: list[dict[str, Any]] = []
-        for point in oriented:
+        for point, _ in candidates:
+            normalized = provider_point(point)
             if compact:
                 previous = compact[-1]
-                if abs(point["x"] - previous["x"]) < 0.15 and abs(point["y"] - previous["y"]) < 0.15:
+                if (
+                    abs(normalized["x"] - previous["x"]) < 0.01
+                    and abs(normalized["y"] - previous["y"]) < 0.01
+                ):
                     continue
-            compact.append(point)
+            compact.append(normalized)
 
         return compact
 
