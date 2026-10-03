@@ -977,6 +977,181 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             merged.append(item)
 
+    def _video_name_side(team_name: Any) -> str | None:
+        normalized = str(team_name or "").strip().casefold()
+        if not normalized:
+            return None
+        home_name = str(game.get("home_team", {}).get("name") or "").strip().casefold()
+        away_name = str(game.get("away_team", {}).get("name") or "").strip().casefold()
+        if normalized == home_name or normalized in home_name or home_name in normalized:
+            return "home"
+        if normalized == away_name or normalized in away_name or away_name in normalized:
+            return "away"
+        return None
+
+    def _video_track(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for point in value:
+            if not isinstance(point, dict):
+                continue
+            try:
+                x = float(point.get("x"))
+                y = float(point.get("y"))
+            except (TypeError, ValueError):
+                continue
+            result.append({
+                "x": max(0.0, min(100.0, x)),
+                "y": max(0.0, min(100.0, y)),
+                "timer": point.get("timer"),
+                "period_id": point.get("period_id"),
+            })
+        return result
+
+    def _video_positions(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for position in value:
+            if not isinstance(position, dict):
+                continue
+            player_id = position.get("player_id")
+            try:
+                x = float(position.get("x"))
+                y = float(position.get("y"))
+            except (TypeError, ValueError):
+                continue
+            current: dict[str, Any] = {
+                "x": max(0.0, min(100.0, x)),
+                "y": max(0.0, min(100.0, y)),
+            }
+            if player_id is not None:
+                try:
+                    current["player_id"] = int(player_id)
+                except (TypeError, ValueError):
+                    pass
+            if position.get("player_name"):
+                current["player_name"] = position.get("player_name")
+            if position.get("team"):
+                current["team"] = position.get("team")
+            result.append(current)
+        return result
+
+    def _video_event_meta(video: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "provider": video.get("provider"),
+            "video_id": video.get("video_id"),
+            "video_event_key": video.get("video_event_key"),
+            "start_seconds": video.get("video_start_seconds"),
+            "end_seconds": video.get("video_end_seconds"),
+            "confidence": video.get("confidence"),
+            "analysis": video.get("analysis"),
+        }
+
+    for video in game.get("video_events", []) or []:
+        if not isinstance(video, dict):
+            continue
+
+        minute = video.get("match_minute")
+        kind = category({
+            "type": video.get("event_type"),
+            "text": video.get("display_label"),
+        })
+        video_side = _video_name_side(video.get("team_name"))
+        player_name = str(video.get("player_name") or "").strip()
+        track = _video_track(video.get("ball_track"))
+        positions = _video_positions(video.get("player_positions"))
+
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for existing in merged:
+            existing_kind = (existing.get("spatial") or {}).get("kind") or category(existing)
+            if existing_kind != kind:
+                continue
+
+            existing_minute = existing.get("minute")
+            if minute is not None and existing_minute is not None:
+                try:
+                    minute_delta = abs(int(existing_minute) - int(minute))
+                except (TypeError, ValueError):
+                    minute_delta = 99
+                if minute_delta > 1:
+                    continue
+            else:
+                minute_delta = 2
+
+            score = float(minute_delta)
+            existing_side = side(existing)
+            if video_side and existing_side and video_side != existing_side:
+                score += 6.0
+
+            existing_player = str(existing.get("player") or "").strip().casefold()
+            if player_name and existing_player:
+                if player_name.casefold() == existing_player:
+                    score -= 0.5
+                else:
+                    score += 2.0
+            candidates.append((score, existing))
+
+        matched = min(candidates, key=lambda row: row[0])[1] if candidates and min(candidates, key=lambda row: row[0])[0] < 5.0 else None
+
+        if matched is None:
+            item: dict[str, Any] = {
+                "id": f"video:{video.get('video_event_key')}",
+                "minute": minute,
+                "extra_minute": video.get("extra_minute"),
+                "type": video.get("event_type") or kind,
+                "text": video.get("display_label") or video.get("event_type") or kind,
+                "player": video.get("player_name"),
+                "related_player_name": video.get("related_player_name"),
+                "source_kind": "video",
+                "video_analysis": _video_event_meta(video),
+                "video_start_seconds": video.get("video_start_seconds"),
+                "video_end_seconds": video.get("video_end_seconds"),
+                "video_confidence": video.get("confidence"),
+                "detail": video.get("analysis") if isinstance(video.get("analysis"), dict) else {},
+            }
+            if video_side == "home":
+                item["is_home"] = True
+                item["team_id"] = home_team_id
+            elif video_side == "away":
+                item["is_home"] = False
+                item["team_id"] = away_team_id
+
+            spatial_data = spatial(item, kind)
+            if track:
+                spatial_data["source"] = "video"
+                spatial_data["anchor"] = track[0]
+                spatial_data["ball_track"] = track
+                spatial_data["ball_path"] = {"start": track[0], "end": track[-1]}
+                item["ball_track"] = track
+                item["ball_path"] = spatial_data["ball_path"]
+            if positions:
+                item["player_positions"] = positions
+            item["spatial"] = spatial_data
+            item["display_type"] = item["text"]
+            merged.append(item)
+            continue
+
+        matched["video_analysis"] = _video_event_meta(video)
+        matched["video_start_seconds"] = video.get("video_start_seconds")
+        matched["video_end_seconds"] = video.get("video_end_seconds")
+        matched["video_confidence"] = video.get("confidence")
+
+        if positions and not matched.get("player_positions"):
+            matched["player_positions"] = positions
+
+        matched_spatial = matched.get("spatial") or spatial(matched, kind)
+        existing_track = list(matched_spatial.get("ball_track") or [])
+        if track and not existing_track:
+            matched_spatial["source"] = "video"
+            matched_spatial["anchor"] = track[0]
+            matched_spatial["ball_track"] = track
+            matched_spatial["ball_path"] = {"start": track[0], "end": track[-1]}
+            matched["ball_track"] = track
+            matched["ball_path"] = matched_spatial["ball_path"]
+            matched["spatial"] = matched_spatial
+
     # Provider may expose the scored attempt as both a goal event and a
     # shot-on-target event. Keep the Goal as the canonical selectable event
     # when minute/team/scorer identify the same action.
@@ -1059,7 +1234,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             item.get("minute") if item.get("minute") is not None else 999,
             item.get("extra_minute") if item.get("extra_minute") is not None else 0,
             item.get("sort_order") if item.get("sort_order") is not None else 999,
-            0 if item.get("source_kind") == "event" else 1,
+            0 if item.get("source_kind") == "event" else 1 if item.get("source_kind") == "timeline" else 2,
         )
     )
     return merged
