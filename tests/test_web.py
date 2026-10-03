@@ -311,3 +311,14 @@ def test_event_coordinate_match_checks_current_and_previous_timer_minute():
 
     assert candidate_windows(39) == [(38 * 60, 38 * 60 + 59), (39 * 60, 39 * 60 + 59)]
     assert candidate_windows(1) == [(0, 59), (60, 119)]
+
+
+def test_shot_track_stops_before_rebound():
+    # The terminal point of a shot is the local closest approach to the target
+    # goal. A later sample moving away belongs to save/rebound/clearance.
+    target_x = 100.0
+    xs = [55.0, 82.0, 96.0, 74.0]
+    distances = [abs(x - target_x) for x in xs]
+    terminal = min(range(len(distances)), key=distances.__getitem__)
+    assert terminal == 2
+    assert distances[3] > distances[2]
