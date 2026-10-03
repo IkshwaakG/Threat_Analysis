@@ -466,14 +466,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        # Football event notation is ordinal: an event shown as 35'
-        # occurred during elapsed 34:00-34:59. Sportmonks ballCoordinates
-        # timer is elapsed match time, so convert display minute -> timer
-        # window before matching.
-        base_elapsed_minute = max(0, minute - 1)
-        event_elapsed_minute = base_elapsed_minute + extra
+        # Sportmonks event.minute and ballCoordinates.timer use the same
+        # match-time scale: minute=37 is matched against timer 37:00-37:59.
+        # extra_minute remains a separate stoppage-time field.
+        event_minute = minute + extra
         event_period_id = item.get("period_id")
-        minute_start = event_elapsed_minute * 60
+        minute_start = event_minute * 60
         minute_end = minute_start + 59
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
@@ -546,6 +544,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             """Pick the short contiguous segment that best approaches target goal."""
             endpoint_candidates: list[tuple[float, int]] = []
             for index, (point, seconds) in enumerate(compact_rows):
+                # A post-goal restart commonly appears as (50,50). Never use
+                # centre-spot/reset samples as a shot or goal endpoint.
+                if abs(float(point["x"]) - 50.0) <= 3.0 and abs(float(point["y"]) - 50.0) <= 6.0:
+                    continue
+
                 target_distance = distance_to_target_goal(point)
                 if target_distance > max_goal_distance:
                     continue
@@ -578,6 +581,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 for start_index in range(max(0, end_index - 4), end_index):
                     start_point, start_second = compact_rows[start_index]
                     if end_second - start_second > 20:
+                        continue
+
+                    # Reject segments containing a large provider sampling gap;
+                    # otherwise a missing goal sequence can be joined to a
+                    # later kickoff/reset and look like real tracking.
+                    segment_rows = compact_rows[start_index : end_index + 1]
+                    if any(
+                        segment_rows[i][1] - segment_rows[i - 1][1] > 15
+                        for i in range(1, len(segment_rows))
+                    ):
                         continue
                     progress = distance_to_target_goal(start_point) - end_distance
                     if progress > best_progress:
