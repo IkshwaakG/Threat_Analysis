@@ -363,11 +363,53 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         if stored_path:
             start = stored_path.get("start")
+            end = stored_path.get("end")
+            start_point = start if isinstance(start, dict) else player_anchor
+
+            # A real event coordinate is authoritative. If the provider gives
+            # only that point, infer only the missing destination for ball
+            # events; do not invent a trajectory for cards/offsides.
+            if kind in {"card", "offside"}:
+                return {
+                    "kind": kind,
+                    "source": "stored",
+                    "anchor": start_point,
+                    "ball_path": None,
+                    "highlight_player_id": None,
+                }
+
+            if isinstance(start_point, dict) and not isinstance(end, dict):
+                seed = (
+                    int(item.get("id") or 0)
+                    + int(item.get("minute") or 0)
+                    + int(item.get("sort_order") or 0)
+                )
+                if kind == "goal":
+                    end = {"x": attacking_x(team_side, 99.2, 0.8), "y": 50.0}
+                elif kind == "corner":
+                    box_y = 43.0 if float(start_point.get("y") or 50.0) < 50.0 else 57.0
+                    end = {"x": attacking_x(team_side, 87.0, 13.0), "y": box_y}
+                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+                    if kind == "shot_off_target":
+                        miss_offsets = (-10.0, -6.0, 6.0, 10.0)
+                        end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
+                    elif kind == "shot_on_target":
+                        target_offsets = (-5.0, -2.0, 2.0, 5.0)
+                        end_y = 50.0 + target_offsets[seed % len(target_offsets)]
+                    else:
+                        end_y = 50.0
+                    end = {"x": attacking_x(team_side, 99.2, 0.8), "y": end_y}
+
+            normalized_path = (
+                {"start": start_point, "end": end if isinstance(end, dict) else None}
+                if isinstance(start_point, dict)
+                else None
+            )
             return {
                 "kind": kind,
-                "source": source,
-                "anchor": start if isinstance(start, dict) else player_anchor,
-                "ball_path": stored_path,
+                "source": "stored",
+                "anchor": start_point,
+                "ball_path": normalized_path,
                 "highlight_player_id": item.get("player_id") if kind == "goal" else None,
             }
 
