@@ -302,3 +302,12 @@ def test_goal_matcher_must_not_use_kickoff_reset_as_goal_track():
     centre = {"x": 50.0, "y": 50.0}
     assert abs(centre["x"] - 50.0) <= 3.0
     assert abs(centre["y"] - 50.0) <= 6.0
+
+
+def test_event_coordinate_match_checks_current_and_previous_timer_minute():
+    def candidate_windows(display_minute: int) -> list[tuple[int, int]]:
+        candidates = sorted({max(0, display_minute - 1), display_minute})
+        return [(minute * 60, minute * 60 + 59) for minute in candidates]
+
+    assert candidate_windows(39) == [(38 * 60, 38 * 60 + 59), (39 * 60, 39 * 60 + 59)]
+    assert candidate_windows(1) == [(0, 59), (60, 119)]
