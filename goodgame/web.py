@@ -837,7 +837,7 @@ def match_visualization(fixture_id: int) -> dict[str, Any]:
             "competition_name": fixture.get("competition_name"),
         },
         "players": _visual_players(game),
-        "ball_coordinates": [],
+        "ball_coordinates": game.get("ball_coordinates") or [],
         "color_source": "fallback",
         "lineup_source": "bigquery_game_view",
     }
