@@ -162,14 +162,40 @@ def fixture_to_match(fixture: dict[str, Any]) -> Match:
     )
 
 
+_EVENT_KINDS = {
+    "goal": "goal",
+    "owngoal": "own_goal",
+    "penalty": "penalty_goal",
+    "missed_penalty": "missed_penalty",
+    "substitution": "substitution",
+    "yellowcard": "card",
+    "redcard": "card",
+    "yellowredcard": "card",
+    "var": "var",
+    "var_card": "var",
+}
+
+
+def _event_code(event: dict[str, Any]) -> str:
+    type_info = event.get("type")
+    if isinstance(type_info, dict):
+        code = type_info.get("developer_name") or type_info.get("code")
+        if code:
+            return str(code).casefold().replace(" ", "_")
+    return ""
+
+
 def fixture_event_to_event(event: dict[str, Any], match: Match) -> Event:
     event_type = (
         name(event.get("type"))
         or str(event.get("type_name") or event.get("info") or "event")
     )
     normalized_type = event_type.casefold()
+    code = _event_code(event)
 
-    if "goal" in normalized_type:
+    if code in _EVENT_KINDS:
+        kind = _EVENT_KINDS[code]
+    elif "goal" in normalized_type:
         kind = "goal"
     elif "substitution" in normalized_type:
         kind = "substitution"
@@ -190,8 +216,14 @@ def fixture_event_to_event(event: dict[str, Any], match: Match) -> Event:
     result = event.get("result")
 
     text = str(event.get("info") or event.get("addition") or event_type)
-    if kind == "goal" and player:
+    if kind in {"goal", "penalty_goal"} and player:
         text = f"Goal by {player}"
+    elif kind == "own_goal" and player:
+        text = f"Own goal by {player}"
+
+    card_class = None
+    if kind == "card":
+        card_class = str(result) if result is not None else code or None
 
     return Event(
         id=event.get("id"),
@@ -206,9 +238,53 @@ def fixture_event_to_event(event: dict[str, Any], match: Match) -> Event:
         player=player,
         player_in=related_player if kind == "substitution" else None,
         player_out=player if kind == "substitution" else None,
-        incident_class=str(result) if kind == "card" and result is not None else None,
+        incident_class=card_class,
+        extra_minute=integer(event.get("extra_minute")),
+        player_id=integer(event.get("player_id")),
+        related_player_id=integer(event.get("related_player_id")),
+        team_id=participant_id,
+        rescinded=bool(event.get("rescinded")),
         raw=dict(event),
     )
+
+
+def fixture_ball_coordinates(fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ball traversal points (ballCoordinates include) in time order."""
+    rows = [
+        {
+            "id": item.get("id"),
+            "participant_id": integer(item.get("participant_id")),
+            "minute": integer(item.get("minute")),
+            "second": integer(item.get("second")),
+            "x": integer(item.get("x")),
+            "y": integer(item.get("y")),
+        }
+        for item in fixture.get("ballcoordinates", fixture.get("ballCoordinates", []))
+        or []
+        if isinstance(item, dict)
+    ]
+    return sorted(
+        rows, key=lambda r: (r["minute"] or 0, r["second"] or 0, r["id"] or 0)
+    )
+
+
+def fixture_player_positions(fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-player formation slot and pitch position from lineups."""
+    return [
+        {
+            "player_id": integer(row.get("player_id")),
+            "player_name": row.get("player_name") or name(row.get("player")),
+            "team_id": integer(row.get("team_id")),
+            "position_id": integer(row.get("position_id")),
+            "position": name(row.get("position")),
+            "formation_field": row.get("formation_field"),
+            "formation_position": integer(row.get("formation_position")),
+            "jersey_number": integer(row.get("jersey_number")),
+            "starter": integer(row.get("type_id")) == 11,
+        }
+        for row in fixture.get("lineups", []) or []
+        if isinstance(row, dict)
+    ]
 
 
 def fixture_events(fixture: dict[str, Any], match: Match) -> list[Event]:
