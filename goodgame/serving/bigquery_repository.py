@@ -817,6 +817,19 @@ class BigQueryServingRepository:
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
+            fixture_video AS (
+              SELECT
+                provider,
+                video_id,
+                url,
+                title,
+                role,
+                event_sync
+              FROM {self._table("fixture_videos")}
+              WHERE fixture_id = @fixture_id
+              ORDER BY updated_at DESC
+              LIMIT 1
+            ),
             season_standings AS (
               SELECT
                 s.team_id,
@@ -1226,6 +1239,20 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'video_reference' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                v.provider,
+                v.video_id,
+                v.url,
+                v.title,
+                v.role,
+                v.event_sync
+              )) AS payload
+            FROM fixture_video v
+
+            UNION ALL
+
+            SELECT
               'ball_coordinate' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 b.coordinate_id AS id,
@@ -1267,6 +1294,7 @@ class BigQueryServingRepository:
         sidelined: list[dict[str, Any]] = []
         raw_fact: dict[str, Any] = {}
         advanced: dict[str, Any] = {}
+        video_reference: dict[str, Any] | None = None
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
 
@@ -1342,6 +1370,8 @@ class BigQueryServingRepository:
                 raw_fact = data
             elif kind == "advanced":
                 advanced = data
+            elif kind == "video_reference":
+                video_reference = data
             elif kind == "ball_coordinate":
                 ball_coordinates.append(data)
             elif kind == "standing":
@@ -1484,6 +1514,7 @@ class BigQueryServingRepository:
             "xg_fixture": advanced.get("xg_fixture"),
             "trends": advanced.get("trends"),
             "expected_lineups": advanced.get("expected_lineups"),
+            "video_reference": video_reference,
             "standings": standings,
             "source": "bigquery",
         }
