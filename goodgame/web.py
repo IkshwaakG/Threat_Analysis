@@ -319,6 +319,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     return current
         return None
 
+    def player_name_for_id(value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            player = players_by_id.get(int(value))
+        except (TypeError, ValueError):
+            player = None
+        return str(player.get("name")) if player and player.get("name") else None
+
     home_team_id = game.get("home_team", {}).get("id")
     away_team_id = game.get("away_team", {}).get("id")
 
@@ -858,7 +867,52 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 current = player_for(item)
                 if current is not None:
                     item["player"] = current.get("name")
+
+            if not item.get("related_player_name") and item.get("related_player_id") is not None:
+                item["related_player_name"] = player_name_for_id(item.get("related_player_id"))
+
+            if kind == "goal":
+                # Normalize the semantic event so UI never presents a scored
+                # goal as merely a shot on target.
+                item["display_type"] = "Goal"
+                item["text"] = "Goal"
+                scorer = item.get("player")
+                assist = item.get("related_player_name")
+                if scorer:
+                    item["scorer"] = scorer
+                if assist and assist != scorer:
+                    item["assist"] = assist
+            else:
+                item["display_type"] = item.get("text") or item.get("type") or kind
+
             merged.append(item)
+
+    # Sportmonks may expose the scored attempt as both a goal event and a
+    # shot-on-target event. Keep the Goal as the canonical selectable event
+    # when minute/team/scorer identify the same action.
+    goals = [event for event in merged if event.get("spatial", {}).get("kind") == "goal"]
+
+    def same_actor(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        if a.get("player_id") is not None and b.get("player_id") is not None:
+            return str(a.get("player_id")) == str(b.get("player_id"))
+        a_name = str(a.get("player") or "").strip().casefold()
+        b_name = str(b.get("player") or "").strip().casefold()
+        return bool(a_name and b_name and a_name == b_name)
+
+    cleaned: list[dict[str, Any]] = []
+    for event in merged:
+        if event.get("spatial", {}).get("kind") == "shot_on_target":
+            duplicate_goal = any(
+                goal.get("minute") == event.get("minute")
+                and goal.get("extra_minute") == event.get("extra_minute")
+                and goal.get("team_id") == event.get("team_id")
+                and same_actor(goal, event)
+                for goal in goals
+            )
+            if duplicate_goal:
+                continue
+        cleaned.append(event)
+    merged = cleaned
 
     merged.sort(
         key=lambda item: (
