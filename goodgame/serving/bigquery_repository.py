@@ -830,24 +830,8 @@ class BigQueryServingRepository:
               ORDER BY updated_at DESC
               LIMIT 1
             ),
-            video_events AS (
-              SELECT
-                video_event_id,
-                provider,
-                video_id,
-                sequence,
-                video_start_seconds,
-                video_end_seconds,
-                match_event_id,
-                match_minute,
-                match_extra_minute,
-                event_type,
-                event_label,
-                player_id,
-                team_id,
-                source,
-                confidence,
-                transcript_text
+            fixture_video_events AS (
+              SELECT *
               FROM {self._table("fixture_video_events")}
               WHERE fixture_id = @fixture_id
             ),
@@ -1275,25 +1259,8 @@ class BigQueryServingRepository:
 
             SELECT
               'video_event' AS row_kind,
-              TO_JSON_STRING(STRUCT(
-                ve.video_event_id AS id,
-                ve.provider,
-                ve.video_id,
-                ve.sequence,
-                ve.video_start_seconds,
-                ve.video_end_seconds,
-                ve.match_event_id,
-                ve.match_minute,
-                ve.match_extra_minute,
-                ve.event_type,
-                ve.event_label,
-                ve.player_id,
-                ve.team_id,
-                ve.source,
-                ve.confidence,
-                ve.transcript_text
-              )) AS payload
-            FROM video_events ve
+              TO_JSON_STRING(v) AS payload
+            FROM fixture_video_events v
 
             UNION ALL
 

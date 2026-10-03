@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from goodgame.web import app
+from goodgame.web import _selectable_events, app
 
 
 class FakeServingRepository:
@@ -163,6 +163,60 @@ class FakeServingRepository:
 class GoodGameWebTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def test_selectable_events_support_both_video_event_shapes(self):
+        game = {
+            "home_team": {"id": 1, "name": "Manchester United"},
+            "away_team": {"id": 2, "name": "Arsenal"},
+            "players": [{"player_id": 10, "name": "Bruno Fernandes", "team": "home"}],
+            "events": [
+                {
+                    "id": 9001,
+                    "minute": 10,
+                    "type": "Goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "is_home": True,
+                }
+            ],
+            "timeline": [],
+            "video_events": [
+                {
+                    "video_event_id": 100,
+                    "match_event_id": 9001,
+                    "event_type": "goal",
+                    "event_label": "Goal",
+                    "match_minute": 10,
+                    "team_id": 1,
+                    "player_id": 10,
+                    "confidence": 0.95,
+                    "transcript_text": "Goal scored",
+                },
+                {
+                    "video_event_key": "video-goal",
+                    "event_type": "goal",
+                    "display_label": "Video-only goal",
+                    "match_minute": 25,
+                    "team_name": "Manchester United",
+                    "player_name": "Bruno Fernandes",
+                    "ball_track": [{"x": 50, "y": 50}, {"x": 90, "y": 50}],
+                    "analysis": {"confidence": 0.8},
+                },
+            ],
+        }
+
+        events = _selectable_events(game)
+
+        self.assertEqual(len(events), 2)
+        matched = next(event for event in events if event.get("id") == 9001)
+        self.assertEqual(matched["video_analysis"]["video_event_key"], 100)
+        self.assertEqual(matched["video_analysis"]["transcript_text"], "Goal scored")
+        video_only = next(event for event in events if event["source_kind"] == "video")
+        self.assertEqual(video_only["id"], "video:video-goal")
+        self.assertEqual(video_only["player"], "Bruno Fernandes")
+        self.assertEqual(video_only["spatial"]["source"], "video")
+        self.assertEqual(len(video_only["spatial"]["ball_track"]), 2)
 
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
