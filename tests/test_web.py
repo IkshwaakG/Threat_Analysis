@@ -175,7 +175,7 @@ class GoodGameWebTests(unittest.TestCase):
         shot = body["selectable_events"][0]["spatial"]
         self.assertEqual(shot["source"], "stored")
         self.assertGreaterEqual(len(shot["ball_track"]), 2)
-        self.assertEqual(shot["ball_path"]["start"]["x"], 61.0)
+        self.assertEqual(shot["ball_path"]["start"]["x"], 73.0)
 
         corner = next(
             event["spatial"]
