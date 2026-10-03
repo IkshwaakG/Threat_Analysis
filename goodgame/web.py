@@ -466,9 +466,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        event_minute = minute + extra
+        # Football event notation is ordinal: an event shown as 35'
+        # occurred during elapsed 34:00-34:59. Sportmonks ballCoordinates
+        # timer is elapsed match time, so convert display minute -> timer
+        # window before matching.
+        base_elapsed_minute = max(0, minute - 1)
+        event_elapsed_minute = base_elapsed_minute + extra
         event_period_id = item.get("period_id")
-        minute_start = event_minute * 60
+        minute_start = event_elapsed_minute * 60
         minute_end = minute_start + 59
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
@@ -504,7 +509,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             same_period = coordinate_stream
 
         # Sportmonks events expose minute granularity while ballCoordinates
-        # expose seconds. Keep a narrow pad around the selected event minute.
+        # expose seconds. Keep a narrow pad around the selected event timer window.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
