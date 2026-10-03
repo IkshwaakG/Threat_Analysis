@@ -1306,6 +1306,34 @@ def global_search(
         raise _service_error(error) from error
 
 
+def _fixture_video_reference(game: dict[str, Any]) -> dict[str, Any] | None:
+    """Return an optional editorial video reference for a known fixture.
+
+    Video is reference material only. It is deliberately not tied to event
+    selection or spatial playback; the frontend keeps event playback on the
+    GoodGame simulation.
+    """
+    fixture = game.get("fixture") or {}
+    home = str((game.get("home_team") or {}).get("name") or "").casefold()
+    away = str((game.get("away_team") or {}).get("name") or "").casefold()
+    starting_at = str(fixture.get("starting_at") or "")
+
+    teams = {home, away}
+    has_liverpool = any("liverpool" in team for team in teams)
+    has_bournemouth = any("bournemouth" in team for team in teams)
+    if has_liverpool and has_bournemouth and starting_at.startswith("2025-08-15"):
+        return {
+            "provider": "youtube",
+            "video_id": "stjx4DyerYA",
+            "url": "https://www.youtube.com/watch?v=stjx4DyerYA",
+            "title": "Liverpool vs Bournemouth highlights",
+            "role": "reference",
+            "event_sync": False,
+        }
+
+    return None
+
+
 @app.get("/api/games/{fixture_id}")
 def game_view(fixture_id: int) -> dict[str, Any]:
     _positive(fixture_id, "fixture_id")
@@ -1313,6 +1341,7 @@ def game_view(fixture_id: int) -> dict[str, Any]:
         game = _repository().get_game_view(fixture_id)
         game["selectable_events"] = _selectable_events(game)
         game["spatial_flow"] = _spatial_flow(game)
+        game["video_reference"] = _fixture_video_reference(game)
         return game
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise _service_error(error) from error
