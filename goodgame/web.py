@@ -515,10 +515,25 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if not selected:
                 return []
             first_second = selected[0][1]
-            selected = [
-                row for row in selected
-                if row[1] - first_second <= 22
-            ]
+            corner_start_x = float(selected[0][0]["x"])
+            corner_on_left_goal = corner_start_x < 50.0
+
+            same_end: list[tuple[dict[str, Any], int]] = []
+            for row in selected:
+                point, seconds = row
+                if seconds - first_second > 22:
+                    break
+                point_x = float(point["x"])
+                # A corner cross must stay in the same attacking end. If the
+                # coordinate stream jumps across midfield, that sample belongs
+                # to a later phase of play and is not part of this corner.
+                if same_end:
+                    if corner_on_left_goal and point_x > 48.0:
+                        break
+                    if not corner_on_left_goal and point_x < 52.0:
+                        break
+                same_end.append(row)
+            selected = same_end
 
         elif kind in {"goal", "shot_on_target", "penalty"}:
             # Actual goal width is only about 11% of pitch width. Allow some
@@ -639,8 +654,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 if kind == "goal":
                     end = {"x": attacking_x(team_side, 100.0, 0.0), "y": 50.0}
                 elif kind == "corner":
-                    box_y = 43.0 if float(start_point.get("y") or 50.0) < 50.0 else 57.0
-                    end = {"x": attacking_x(team_side, 87.0, 13.0), "y": box_y}
+                    start_x = float(start_point.get("x") or 50.0)
+                    start_y = float(start_point.get("y") or 50.0)
+                    box_y = 43.0 if start_y < 50.0 else 57.0
+                    # Corner destination is determined by the corner's actual
+                    # goal-line end, not by team/home/half assumptions.
+                    end_x = 13.0 if start_x < 50.0 else 87.0
+                    end = {"x": end_x, "y": box_y}
                 elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
                     if kind == "shot_off_target":
                         miss_offsets = (
@@ -696,9 +716,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 corner_y = 2.0 if player_anchor["y"] < 50.0 else 98.0
             else:
                 corner_y = 2.0 if seed % 2 == 0 else 98.0
+
+            # We only use team/half information to choose which goal-line end
+            # the inferred corner starts from. Once start_x is chosen, end_x
+            # is derived from that same goal end so the cross cannot jump to
+            # the opposite half.
+            start_x = attacking_x(team_side, 99.0, 1.0)
             box_y = 43.0 if corner_y < 50.0 else 57.0
-            start = {"x": attacking_x(team_side, 99.0, 1.0), "y": corner_y}
-            end = {"x": attacking_x(team_side, 87.0, 13.0), "y": box_y}
+            end_x = 13.0 if start_x < 50.0 else 87.0
+            start = {"x": start_x, "y": corner_y}
+            end = {"x": end_x, "y": box_y}
             return {
                 "kind": kind,
                 "source": "inferred",
