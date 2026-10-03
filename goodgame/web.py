@@ -359,7 +359,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     def event_half(item: dict[str, Any]) -> int:
         """Return regulation half from event match minute.
 
-        Sportmonks period ids are opaque identifiers, while event minute is
+        Provider period ids are opaque identifiers, while event minute is
         directly usable for first/second-half attacking direction. Extra time
         continues alternating ends every period.
         """
@@ -368,7 +368,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             minute = 0
         # 45' and 90' are regulation stoppage-time anchors, not the next
-        # period. Sportmonks carries added time separately in extra_minute.
+        # period. Provider carries added time separately in extra_minute.
         if minute <= 45:
             return 1
         if minute <= 90:
@@ -404,7 +404,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
     def timer_seconds(value: Any) -> int | None:
-        """Sportmonks timer is match time in MM:SS."""
+        """Provider timer is match time in MM:SS."""
         if value is None:
             return None
         text = str(value).strip()
@@ -439,7 +439,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         spatial_data: dict[str, Any],
         kind: str,
     ) -> list[dict[str, Any]]:
-        """Match an event to the most plausible stored Sportmonks ball segment.
+        """Match an event to the most plausible stored Provider ball segment.
 
         ballCoordinates are a frequent time series rather than event-attached
         paths. Match by period/time, then score short contiguous segments
@@ -466,7 +466,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        # Sportmonks event labels and ball-coordinate timers can differ by
+        # Provider event labels and ball-coordinate timers can differ by
         # one displayed minute in real fixtures. Evaluate both plausible timer
         # windows and let event geometry decide which one belongs to the action.
         display_minute = minute + extra
@@ -695,9 +695,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     break
                 point_x = float(point["x"])
                 if same_end:
-                    if target_is_left and point_x > 48.0:
+                    if target_is_left and point_x > 30.0:
                         break
-                    if not target_is_left and point_x < 52.0:
+                    if not target_is_left and point_x < 70.0:
                         break
                 same_end.append(row)
             selected = same_end
@@ -977,7 +977,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             merged.append(item)
 
-    # Sportmonks may expose the scored attempt as both a goal event and a
+    # Provider may expose the scored attempt as both a goal event and a
     # shot-on-target event. Keep the Goal as the canonical selectable event
     # when minute/team/scorer identify the same action.
     goals = [event for event in merged if event.get("spatial", {}).get("kind") == "goal"]
@@ -993,7 +993,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         b_name = str(b.get("player") or "").strip().casefold()
         return bool(a_name and b_name and a_name == b_name)
 
-    # When Sportmonks exposes a goal plus its scored shot as separate
+    # When Provider exposes a goal plus its scored shot as separate
     # events, the shot-on-target entry may be the one that resolves cleanly to
     # the coordinate stream. Transfer that stored traversal onto the Goal
     # before removing the duplicate shot event.
