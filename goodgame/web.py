@@ -549,46 +549,53 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             on_target: bool,
             max_goal_distance: float,
         ) -> list[tuple[dict[str, Any], int]]:
-            """Pick the short contiguous segment that best approaches target goal."""
-            endpoint_candidates: list[tuple[float, int]] = []
-            for index, (point, seconds) in enumerate(compact_rows):
-                # A post-goal restart commonly appears as (50,50). Never use
-                # centre-spot/reset samples as a shot or goal endpoint.
+            """Return only the attacking phase of the shot.
+
+            Pick the local run that approaches the correct goal and stop at the
+            closest approach. Samples after that point represent a save,
+            rebound, clearance, or the next phase and must not be drawn as part
+            of the shot trajectory.
+            """
+            viable_indices: list[int] = []
+            for index, (point, _) in enumerate(compact_rows):
+                # Never treat a centre-spot restart as part of a shot.
                 if abs(float(point["x"]) - 50.0) <= 3.0 and abs(float(point["y"]) - 50.0) <= 6.0:
                     continue
+                if distance_to_target_goal(point) <= max_goal_distance:
+                    viable_indices.append(index)
 
-                target_distance = distance_to_target_goal(point)
-                if target_distance > max_goal_distance:
-                    continue
-
-                center_penalty = 0.0
-                if on_target:
-                    # We have no Z coordinate, so allow provider tolerance but
-                    # keep on-target endpoints near the goal mouth in Y.
-                    center_distance = goal_center_distance(point)
-                    if center_distance > GOAL_HALF_WIDTH_PERCENT + 8.0:
-                        continue
-                    center_penalty = center_distance * 1.7
-
-                # Prefer samples nearest the correct attacking goal, then those
-                # inside the actual event minute.
-                score = target_distance * 4.0 + center_penalty + time_score(seconds) * 0.25
-                endpoint_candidates.append((score, index))
-
-            if not endpoint_candidates:
+            if not viable_indices:
                 return []
 
-            endpoint_candidates.sort(key=lambda row: row[0])
+            candidates: list[tuple[float, int, int]] = []
 
-            for _, end_index in endpoint_candidates:
+            for end_index in viable_indices:
                 end_point, end_second = compact_rows[end_index]
                 end_distance = distance_to_target_goal(end_point)
 
+                if on_target:
+                    center_distance = goal_center_distance(end_point)
+                    if center_distance > GOAL_HALF_WIDTH_PERCENT + 8.0:
+                        continue
+                else:
+                    center_distance = 0.0
+
+                # Do not use this endpoint if the immediately following sample
+                # gets materially closer to goal; that means the shot has not
+                # reached its terminal point yet.
+                if end_index + 1 < len(compact_rows):
+                    next_point, next_second = compact_rows[end_index + 1]
+                    if next_second - end_second <= 16:
+                        next_distance = distance_to_target_goal(next_point)
+                        if next_distance < end_distance - 2.0:
+                            continue
+
                 best_start_index: int | None = None
                 best_progress = 0.0
-                for start_index in range(max(0, end_index - 5), end_index):
+
+                for start_index in range(max(0, end_index - 6), end_index):
                     start_point, start_second = compact_rows[start_index]
-                    if end_second - start_second > 28:
+                    if end_second - start_second > 35:
                         continue
 
                     segment_rows = compact_rows[start_index : end_index + 1]
@@ -597,23 +604,53 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         for i in range(1, len(segment_rows))
                     ):
                         continue
-                    progress = distance_to_target_goal(start_point) - end_distance
+
+                    # Every meaningful step should trend goalward. Small
+                    # sideways/noisy moves are allowed, but once the ball moves
+                    # clearly away from goal the shot phase has ended.
+                    distances = [distance_to_target_goal(row[0]) for row in segment_rows]
+                    if any(
+                        distances[i] > distances[i - 1] + 6.0
+                        for i in range(1, len(distances))
+                    ):
+                        continue
+
+                    progress = distances[0] - distances[-1]
                     if progress > best_progress:
                         best_progress = progress
                         best_start_index = start_index
 
-                if best_start_index is not None and best_progress >= 3.0:
-                    return compact_rows[best_start_index : end_index + 1]
+                if best_start_index is None or best_progress < 3.0:
+                    continue
 
-                # Some provider streams only expose the terminal shot sample
-                # plus a nearby prior ball location. For shots (not goals),
-                # allow the nearest prior distinct sample when it still moves
-                # materially toward the correct goal and is temporally close.
-                if kind in {"shot", "shot_on_target", "shot_off_target"}:
+                # Lower score is better: finish close to goal / goal mouth,
+                # reward strong goalward progress, and weakly prefer points
+                # close to the event's timer window.
+                score = (
+                    end_distance * 4.0
+                    + center_distance * (1.7 if on_target else 0.0)
+                    + time_score(end_second) * 0.25
+                    - best_progress * 0.35
+                )
+                candidates.append((score, best_start_index, end_index))
+
+            if candidates:
+                _, start_index, end_index = min(candidates, key=lambda row: row[0])
+                return compact_rows[start_index : end_index + 1]
+
+            # Sparse provider fallback for shots only: if we have just an
+            # origin and one terminal sample, keep those two points, but still
+            # stop at the closest approach (never include a rebound after it).
+            if kind in {"shot", "shot_on_target", "shot_off_target"}:
+                for end_index in sorted(
+                    viable_indices,
+                    key=lambda index: distance_to_target_goal(compact_rows[index][0]),
+                ):
+                    end_point, end_second = compact_rows[end_index]
+                    end_distance = distance_to_target_goal(end_point)
                     for start_index in range(end_index - 1, -1, -1):
                         start_point, start_second = compact_rows[start_index]
-                        gap = end_second - start_second
-                        if gap > 35:
+                        if end_second - start_second > 35:
                             break
                         progress = distance_to_target_goal(start_point) - end_distance
                         if progress >= 8.0:
