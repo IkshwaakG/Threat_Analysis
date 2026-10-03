@@ -84,6 +84,19 @@ class FakeServingRepository:
                     "ball_path": None,
                     "player_positions": [],
                     "detail": {},
+                },
+                {
+                    "id": 9002,
+                    "minute": 12,
+                    "extra_minute": None,
+                    "type": "Corner",
+                    "text": "Corner",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "is_home": True,
+                    "ball_path": None,
+                    "player_positions": [],
+                    "detail": {},
                 }
             ],
             "timeline": [],
@@ -92,6 +105,11 @@ class FakeServingRepository:
                 {"id": 2, "period_id": 100, "timer": "10:00", "x": 66.0, "y": 49.0},
                 {"id": 3, "period_id": 100, "timer": "10:05", "x": 73.0, "y": 50.0},
                 {"id": 4, "period_id": 100, "timer": "10:10", "x": 81.0, "y": 50.0},
+                {"id": 5, "period_id": 100, "timer": "11:56", "x": 99.0, "y": 2.0},
+                {"id": 6, "period_id": 100, "timer": "12:00", "x": 96.0, "y": 8.0},
+                {"id": 7, "period_id": 100, "timer": "12:04", "x": 91.0, "y": 28.0},
+                {"id": 8, "period_id": 100, "timer": "12:08", "x": 86.0, "y": 42.0},
+                {"id": 9, "period_id": 100, "timer": "12:12", "x": 63.0, "y": 50.0},
             ],
             "players": [
                 {
@@ -154,10 +172,21 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["home_team"]["name"], "Manchester United")
         self.assertEqual(body["players"][0]["player_id"], 10)
         self.assertTrue(body["selectable_events"])
-        spatial = body["selectable_events"][0]["spatial"]
-        self.assertEqual(spatial["source"], "stored")
-        self.assertGreaterEqual(len(spatial["ball_track"]), 2)
-        self.assertEqual(spatial["ball_path"]["start"]["x"], 61.0)
+        shot = body["selectable_events"][0]["spatial"]
+        self.assertEqual(shot["source"], "stored")
+        self.assertGreaterEqual(len(shot["ball_track"]), 2)
+        self.assertEqual(shot["ball_path"]["start"]["x"], 73.0)
+
+        corner = next(
+            event["spatial"]
+            for event in body["selectable_events"]
+            if event["spatial"]["kind"] == "corner"
+        )
+        self.assertEqual(corner["source"], "stored")
+        self.assertGreaterEqual(len(corner["ball_track"]), 2)
+        self.assertGreaterEqual(corner["ball_path"]["start"]["x"], 95.0)
+        self.assertLessEqual(corner["ball_path"]["start"]["y"], 12.0)
+        self.assertGreater(corner["ball_path"]["end"]["x"], 70.0)
 
     def test_visualization_is_derived_from_same_game_view(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
