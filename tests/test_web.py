@@ -71,6 +71,28 @@ class FakeServingRepository:
                 "stats": [],
             },
             "game_stats": [],
+            "events": [
+                {
+                    "id": 9001,
+                    "minute": 10,
+                    "extra_minute": None,
+                    "type": "Shot On Target",
+                    "text": "Shot On Target",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "is_home": True,
+                    "ball_path": None,
+                    "player_positions": [],
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "09:55", "x": 61.0, "y": 48.0},
+                {"id": 2, "period_id": 100, "timer": "10:00", "x": 66.0, "y": 49.0},
+                {"id": 3, "period_id": 100, "timer": "10:05", "x": 73.0, "y": 50.0},
+                {"id": 4, "period_id": 100, "timer": "10:10", "x": 81.0, "y": 50.0},
+            ],
             "players": [
                 {
                     "player_id": 10,
@@ -131,6 +153,11 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["fixture"]["id"], 42)
         self.assertEqual(body["home_team"]["name"], "Manchester United")
         self.assertEqual(body["players"][0]["player_id"], 10)
+        self.assertTrue(body["selectable_events"])
+        spatial = body["selectable_events"][0]["spatial"]
+        self.assertEqual(spatial["source"], "stored")
+        self.assertGreaterEqual(len(spatial["ball_track"]), 2)
+        self.assertEqual(spatial["ball_path"]["start"]["x"], 61.0)
 
     def test_visualization_is_derived_from_same_game_view(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
