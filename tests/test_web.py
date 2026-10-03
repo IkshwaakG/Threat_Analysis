@@ -286,3 +286,13 @@ def test_goal_can_reuse_matching_shot_on_target_track():
     assert goal["minute"] == shot["minute"]
     assert goal["team_id"] == shot["team_id"]
     assert shot["spatial"]["source"] == "stored"
+
+
+def test_display_minute_maps_to_elapsed_timer_window():
+    def timer_window(display_minute: int, extra_minute: int = 0) -> tuple[int, int]:
+        elapsed_minute = max(0, display_minute - 1) + extra_minute
+        return elapsed_minute * 60, elapsed_minute * 60 + 59
+
+    assert timer_window(35) == (34 * 60, 34 * 60 + 59)
+    assert timer_window(6) == (5 * 60, 5 * 60 + 59)
+    assert timer_window(1) == (0, 59)
