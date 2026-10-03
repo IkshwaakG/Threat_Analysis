@@ -830,6 +830,27 @@ class BigQueryServingRepository:
               ORDER BY updated_at DESC
               LIMIT 1
             ),
+            fixture_video_events AS (
+              SELECT
+                video_event_key,
+                provider,
+                video_id,
+                event_type,
+                display_label,
+                match_minute,
+                extra_minute,
+                video_start_seconds,
+                video_end_seconds,
+                team_name,
+                player_name,
+                related_player_name,
+                confidence,
+                analysis,
+                ball_track,
+                player_positions
+              FROM {self._table("fixture_video_events")}
+              WHERE fixture_id = @fixture_id
+            ),
             season_standings AS (
               SELECT
                 s.team_id,
@@ -1253,6 +1274,30 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'video_event' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                v.video_event_key,
+                v.provider,
+                v.video_id,
+                v.event_type,
+                v.display_label,
+                v.match_minute,
+                v.extra_minute,
+                v.video_start_seconds,
+                v.video_end_seconds,
+                v.team_name,
+                v.player_name,
+                v.related_player_name,
+                v.confidence,
+                v.analysis,
+                v.ball_track,
+                v.player_positions
+              )) AS payload
+            FROM fixture_video_events v
+
+            UNION ALL
+
+            SELECT
               'ball_coordinate' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 b.coordinate_id AS id,
@@ -1295,6 +1340,7 @@ class BigQueryServingRepository:
         raw_fact: dict[str, Any] = {}
         advanced: dict[str, Any] = {}
         video_reference: dict[str, Any] | None = None
+        video_events: list[dict[str, Any]] = []
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
 
@@ -1372,6 +1418,8 @@ class BigQueryServingRepository:
                 advanced = data
             elif kind == "video_reference":
                 video_reference = data
+            elif kind == "video_event":
+                video_events.append(data)
             elif kind == "ball_coordinate":
                 ball_coordinates.append(data)
             elif kind == "standing":
@@ -1515,6 +1563,7 @@ class BigQueryServingRepository:
             "trends": advanced.get("trends"),
             "expected_lineups": advanced.get("expected_lineups"),
             "video_reference": video_reference,
+            "video_events": video_events,
             "standings": standings,
             "source": "bigquery",
         }
