@@ -26,6 +26,17 @@ class ServingArchitectureTests(unittest.TestCase):
         self.assertIn('"video_events": video_events', serving)
         self.assertIn('self._table("fixture_participants")', serving)
         self.assertIn('"head_to_head": head_to_head', serving)
+        self.assertNotIn(
+            "WHERE fp.fixture_id = f.fixture_id\n                    AND fp.team_id = current_teams.home_team_id",
+            serving,
+        )
+        self.assertNotIn(
+            "WHERE fp.fixture_id = f.fixture_id\n                    AND fp.team_id = current_teams.away_team_id",
+            serving,
+        )
+        self.assertNotIn("ARRAY(\n                  SELECT AS STRUCT", serving)
+        self.assertIn("h2h_candidates AS (", serving)
+        self.assertIn("season_standing_details AS (", serving)
         self.assertIn('self._table("fixture_lineups")', serving)
         self.assertIn('"ball_coordinates": ball_coordinates', serving)
 
