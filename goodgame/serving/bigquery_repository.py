@@ -328,12 +328,18 @@ def _event_detail(raw: Any) -> dict[str, Any]:
     )
     period_minutes = scalar(period.get("minutes"))
     period_seconds = scalar(period.get("seconds"))
+    period_counts_from = scalar(period.get("counts_from"))
+    period_length = scalar(period.get("period_length"))
+    period_time_added = scalar(period.get("time_added"))
     period_clock = None
+    period_elapsed_seconds = None
     try:
         if period_minutes is not None and period_seconds is not None:
             period_clock = f"{int(period_minutes)}:{int(period_seconds):02d}"
+            period_elapsed_seconds = int(period_minutes) * 60 + int(period_seconds)
     except (TypeError, ValueError):
         period_clock = None
+        period_elapsed_seconds = None
 
     result = {
         "xg": scalar(first(raw.get("xg"), raw.get("expected_goals"), shot.get("xg"), shot.get("expected_goals"))),
@@ -344,6 +350,12 @@ def _event_detail(raw: Any) -> dict[str, Any]:
         "shot_type": scalar(first(subtype_name, raw.get("shot_type"), shot.get("type"), raw.get("type"))),
         "sub_type": subtype_name,
         "period_clock": period_clock,
+        "period_minutes": period_minutes,
+        "period_seconds": period_seconds,
+        "period_elapsed_seconds": period_elapsed_seconds,
+        "period_counts_from": period_counts_from,
+        "period_length": period_length,
+        "period_time_added": period_time_added,
         "period_description": scalar(period.get("description")),
     }
     return {key: value for key, value in result.items() if value not in (None, "")}

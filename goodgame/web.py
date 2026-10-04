@@ -561,6 +561,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             if kind == "goal" and comment.get("is_goal") is not True:
                 continue
+            if kind != "goal" and comment.get("is_goal") is True:
+                # A scored action may also have a corner/shot row in the same
+                # minute. Keep the goal commentary for the Goal event and
+                # cluster the related rows later; do not relabel the corner.
+                continue
             text = str(comment.get("comment") or "")
             lower_text = text.casefold()
             score = 0
@@ -586,9 +591,6 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             if kind == "goal" and comment.get("is_goal") is not True:
                 score += 4
-            if kind != "goal" and comment.get("is_goal") is True:
-                score += 5
-
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
@@ -632,6 +634,29 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         for phrase, normalized_origin in origin_phrases:
             if phrase in lower:
                 context["shot_origin"] = normalized_origin
+                break
+
+        if "shot_origin" not in context:
+            if "tough angle on the left" in lower or "tight angle on the left" in lower:
+                context["shot_origin"] = "left side of the box"
+            elif "tough angle on the right" in lower or "tight angle on the right" in lower:
+                context["shot_origin"] = "right side of the box"
+
+        assist_origin_phrases = (
+            ("cross from the left", "left wing"),
+            ("cross from the right", "right wing"),
+            ("cross from the left wing", "left wing"),
+            ("cross from the right wing", "right wing"),
+            ("from the left wing", "left wing"),
+            ("from the right wing", "right wing"),
+            ("from the left flank", "left wing"),
+            ("from the right flank", "right wing"),
+            ("from the byline on the left", "left byline"),
+            ("from the byline on the right", "right byline"),
+        )
+        for phrase, assist_origin in assist_origin_phrases:
+            if phrase in lower:
+                context["assist_origin"] = assist_origin
                 break
 
         goal_targets = (
@@ -705,6 +730,73 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["situation"] = "Penalty"
 
         return context
+
+    def semantic_kind_from_comment(
+        original_kind: str,
+        matched_commentary: dict[str, Any] | None,
+        context: dict[str, Any],
+    ) -> str:
+        # Structured Goal is authoritative and can never be downgraded by text.
+        if original_kind == "goal":
+            return "goal"
+
+        text = str((matched_commentary or {}).get("comment") or "").casefold()
+        if matched_commentary and matched_commentary.get("is_goal") is True:
+            return "goal"
+        if text.startswith("goal!") or " goal! " in f" {text} ":
+            return "goal"
+
+        if original_kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            outcome = str(context.get("shot_outcome_hint") or "").casefold()
+            if outcome == "saved":
+                return "shot_on_target"
+            if outcome in {"left", "right", "high", "bar", "post"}:
+                return "shot_off_target"
+
+        return original_kind
+
+    def player_position_anchor(
+        item: dict[str, Any],
+        player_id: Any,
+    ) -> dict[str, float] | None:
+        if player_id is None:
+            return None
+        for position in item.get("player_positions", []) or []:
+            if not isinstance(position, dict):
+                continue
+            if str(position.get("player_id")) != str(player_id):
+                continue
+            try:
+                return {
+                    "x": float(position["x"]),
+                    "y": float(position["y"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                return None
+        return None
+
+    def semantic_assist_anchor(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float] | None:
+        origin = str(context.get("assist_origin") or "").casefold()
+        if not origin:
+            return None
+
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+        x = 80.0 if attacks_right else 20.0
+        if "byline" in origin:
+            x = 94.0 if attacks_right else 6.0
+
+        if "left" in origin:
+            y = 15.0 if attacks_right else 85.0
+        elif "right" in origin:
+            y = 85.0 if attacks_right else 15.0
+        else:
+            y = 50.0
+        return {"x": x, "y": y}
 
     def trend_context_for_event(item: dict[str, Any]) -> list[dict[str, Any]]:
         try:
@@ -879,23 +971,38 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        # Provider event labels and ball-coordinate timers can differ by
-        # one displayed minute in real fixtures. Evaluate both plausible timer
-        # windows and let event geometry decide which one belongs to the action.
-        display_minute = minute + extra
-        candidate_minutes = sorted({
-            max(0, display_minute - 1),
-            display_minute,
-        })
+        # Football event minutes are ordinal display minutes:
+        #   13'   -> 12:00-12:59
+        #   45+1' -> 45:00-45:59
+        #   45+2' -> 46:00-46:59
+        # Therefore the canonical timer minute is minute - 1 + extra_minute.
+        timer_minute = max(0, minute - 1 + extra)
         candidate_windows = [
-            (candidate * 60, candidate * 60 + 59)
-            for candidate in candidate_minutes
+            (max(0, timer_minute * 60 - 16), timer_minute * 60 + 69)
         ]
         event_period_id = item.get("period_id")
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
         detail_context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
         semantic_launch = semantic_shot_start(item, team_side, detail_context)
+
+        # period.minutes + period.seconds describe the period clock boundary.
+        # They are NOT the individual event second, but they let us reject ball
+        # samples that cannot belong to this period. counts_from gives the lower
+        # match-clock boundary when the provider exposes it (e.g. 45 for 2H).
+        try:
+            period_clock_ceiling = int(detail_context.get("period_elapsed_seconds"))
+        except (TypeError, ValueError):
+            period_clock_ceiling = None
+        try:
+            period_counts_from = int(detail_context.get("period_counts_from"))
+        except (TypeError, ValueError):
+            period_counts_from = None
+        period_clock_floor = (
+            period_counts_from * 60
+            if period_counts_from is not None
+            else None
+        )
 
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -922,16 +1029,25 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         same_period = [
             (point, seconds)
             for point, seconds in coordinate_stream
-            if event_period_id is None or point.get("period_id") == event_period_id
+            if (event_period_id is None or point.get("period_id") == event_period_id)
+            and (period_clock_floor is None or seconds >= period_clock_floor)
+            and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
         ]
         if not same_period:
-            same_period = coordinate_stream
+            same_period = [
+                (point, seconds)
+                for point, seconds in coordinate_stream
+                if (period_clock_floor is None or seconds >= period_clock_floor)
+                and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
+            ]
 
-        # Search both plausible timer windows, with a small boundary pad.
+        # Search the canonical football-minute window, with a brief margin at
+        # either edge for trajectories that cross a minute boundary. The
+        # bounded margin prevents a 13' event from consuming 13:10 coordinates.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if any(start - 12 <= seconds <= end + 12 for start, end in candidate_windows)
+            if any(start <= seconds <= end for start, end in candidate_windows)
         ]
         if not time_candidates:
             return []
@@ -1585,6 +1701,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["commentary_text"] = comment_text
             item["detail"] = detail
 
+            semantic_kind = semantic_kind_from_comment(
+                kind,
+                matched_commentary,
+                detail,
+            )
+            if semantic_kind != kind:
+                item["original_spatial_kind"] = kind
+                kind = semantic_kind
+
             trend_context = trend_context_for_event(item)
             if trend_context:
                 item["trend_context"] = trend_context
@@ -1632,27 +1757,36 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 }
 
                 if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
-                    coordinate_actor_anchor = coordinate_track[
-                        min(max(shot_start_index, 0), len(coordinate_track) - 1)
-                    ]
+                    # Player markers are not tied to ball-path endpoints.
+                    # Position them only when comments/facts/player_positions
+                    # give us evidence for an actor location.
                     semantic_actor_anchor = semantic_shot_start(
                         item,
                         team_side,
                         detail,
                     )
-                    spatial_data["shot_actor_anchor"] = (
-                        semantic_actor_anchor or {
-                            "x": float(coordinate_actor_anchor["x"]),
-                            "y": float(coordinate_actor_anchor["y"]),
-                        }
+                    stored_actor_anchor = player_position_anchor(
+                        item,
+                        item.get("player_id"),
                     )
+                    actor_anchor = semantic_actor_anchor or stored_actor_anchor
+                    if actor_anchor is not None:
+                        spatial_data["shot_actor_anchor"] = actor_anchor
                     spatial_data["shot_start_index"] = shot_start_index
 
                     if has_assist_phase:
-                        spatial_data["assist_actor_anchor"] = {
-                            "x": float(coordinate_track[0]["x"]),
-                            "y": float(coordinate_track[0]["y"]),
-                        }
+                        stored_assist_anchor = player_position_anchor(
+                            item,
+                            item.get("related_player_id"),
+                        )
+                        inferred_assist_anchor = semantic_assist_anchor(
+                            item,
+                            team_side,
+                            detail,
+                        )
+                        assist_anchor = stored_assist_anchor or inferred_assist_anchor
+                        if assist_anchor is not None:
+                            spatial_data["assist_actor_anchor"] = assist_anchor
 
                     spatial_data["phases"] = (
                         [
@@ -1690,18 +1824,29 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["ball_path"] = spatial_data["ball_path"]
             if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
                 semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
-                path_start = (
-                    spatial_data.get("ball_path", {}).get("start")
-                    if isinstance(spatial_data.get("ball_path"), dict)
-                    else None
-                )
+                stored_actor_anchor = player_position_anchor(item, item.get("player_id"))
                 path_end = (
                     spatial_data.get("ball_path", {}).get("end")
                     if isinstance(spatial_data.get("ball_path"), dict)
                     else None
                 )
-                if semantic_actor_anchor or isinstance(path_start, dict):
-                    spatial_data["shot_actor_anchor"] = semantic_actor_anchor or path_start
+                actor_anchor = semantic_actor_anchor or stored_actor_anchor
+                if actor_anchor is not None:
+                    spatial_data["shot_actor_anchor"] = actor_anchor
+
+                stored_assist_anchor = player_position_anchor(
+                    item,
+                    item.get("related_player_id"),
+                )
+                inferred_assist_anchor = semantic_assist_anchor(
+                    item,
+                    team_side,
+                    detail,
+                )
+                assist_anchor = stored_assist_anchor or inferred_assist_anchor
+                if assist_anchor is not None:
+                    spatial_data["assist_actor_anchor"] = assist_anchor
+
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
@@ -1714,9 +1859,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if not item.get("related_player_name") and item.get("related_player_id") is not None:
                 item["related_player_name"] = player_name_for_id(item.get("related_player_id"))
 
+            item["semantic_type"] = kind
             if kind == "goal":
                 # Normalize the semantic event so UI never presents a scored
-                # goal as merely a shot on target.
+                # goal as merely a corner/shot.
                 item["display_type"] = "Goal"
                 item["text"] = "Goal"
                 scorer = item.get("player")
@@ -1725,6 +1871,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item["scorer"] = scorer
                 if assist and assist != scorer:
                     item["assist"] = assist
+            elif kind == "shot_on_target":
+                item["display_type"] = "Shot On Target"
+            elif kind == "shot_off_target":
+                item["display_type"] = "Shot Off Target"
+            elif kind == "shot":
+                item["display_type"] = "Shot"
+            elif kind == "corner":
+                item["display_type"] = "Corner"
             else:
                 item["display_type"] = item.get("text") or item.get("type") or kind
 
@@ -1947,6 +2101,133 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             matched["ball_track"] = track
             matched["ball_path"] = matched_spatial["ball_path"]
             matched["spatial"] = matched_spatial
+
+    def same_occurrence(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return (
+            a.get("minute") == b.get("minute")
+            and a.get("extra_minute") == b.get("extra_minute")
+            and a.get("team_id") == b.get("team_id")
+        )
+
+    def spatial_points(event: dict[str, Any]) -> list[dict[str, Any]]:
+        spatial_data = event.get("spatial") or {}
+        track = [
+            dict(point)
+            for point in spatial_data.get("ball_track", []) or []
+            if isinstance(point, dict)
+        ]
+        if track:
+            return track
+        path = spatial_data.get("ball_path")
+        if not isinstance(path, dict):
+            return []
+        result: list[dict[str, Any]] = []
+        for point in (path.get("start"), path.get("end")):
+            if isinstance(point, dict) and point.get("x") is not None and point.get("y") is not None:
+                result.append({
+                    "x": float(point["x"]),
+                    "y": float(point["y"]),
+                    "timer": point.get("timer"),
+                    "period_id": point.get("period_id") or event.get("period_id"),
+                })
+        return result
+
+    # A goal may be represented by a Goal event plus a Corner/Shot row from
+    # the same minute. When the goal comment/facts say it followed a corner,
+    # fold that delivery into the Goal instead of showing "Corner" as the
+    # canonical event.
+    clustered_ids: set[str] = set()
+    provider_goals = [
+        event for event in merged
+        if (event.get("spatial") or {}).get("kind") == "goal"
+    ]
+    for goal in provider_goals:
+        detail = goal.get("detail") if isinstance(goal.get("detail"), dict) else {}
+        situation_text = " ".join([
+            str(detail.get("situation") or ""),
+            str(goal.get("commentary_text") or ""),
+        ]).casefold()
+        if "corner" not in situation_text:
+            continue
+
+        related_corners = [
+            event for event in merged
+            if event is not goal
+            and same_occurrence(goal, event)
+            and (event.get("spatial") or {}).get("kind") == "corner"
+        ]
+        if not related_corners:
+            continue
+
+        corner = max(
+            related_corners,
+            key=lambda event: len(spatial_points(event)),
+        )
+        clustered_ids.add(str(corner.get("id")))
+
+        goal_spatial = goal.get("spatial") or {}
+        corner_points = spatial_points(corner)
+        semantic_start = (
+            goal_spatial.get("shot_actor_anchor")
+            or semantic_shot_start(goal, side(goal), detail)
+        )
+        goal_end = semantic_goal_end(goal, side(goal), detail)
+
+        combined: list[dict[str, Any]] = list(corner_points)
+        if semantic_start is not None:
+            if not combined or (
+                (float(combined[-1]["x"]) - float(semantic_start["x"])) ** 2
+                + (float(combined[-1]["y"]) - float(semantic_start["y"])) ** 2
+            ) ** 0.5 > 1.5:
+                combined.append({
+                    "x": round(float(semantic_start["x"]), 3),
+                    "y": round(float(semantic_start["y"]), 3),
+                    "timer": None,
+                    "period_id": goal.get("period_id"),
+                })
+        shot_start_index = max(0, len(combined) - 1)
+
+        if not combined or (
+            (float(combined[-1]["x"]) - float(goal_end["x"])) ** 2
+            + (float(combined[-1]["y"]) - float(goal_end["y"])) ** 2
+        ) ** 0.5 > 1.0:
+            combined.append({
+                "x": round(float(goal_end["x"]), 3),
+                "y": round(float(goal_end["y"]), 3),
+                "timer": None,
+                "period_id": goal.get("period_id"),
+            })
+
+        if len(combined) >= 2:
+            goal_spatial["source"] = "clustered_corner_goal"
+            goal_spatial["ball_track"] = combined
+            goal_spatial["anchor"] = combined[0]
+            goal_spatial["ball_path"] = {
+                "start": combined[0],
+                "end": combined[-1],
+            }
+            goal_spatial["shot_start_index"] = shot_start_index
+            goal_spatial["phases"] = [
+                {
+                    "kind": "assist",
+                    "start_index": 0,
+                    "end_index": shot_start_index,
+                },
+                {
+                    "kind": "shot",
+                    "start_index": shot_start_index,
+                    "end_index": len(combined) - 1,
+                },
+            ]
+            goal["spatial"] = goal_spatial
+            goal["ball_track"] = combined
+            goal["ball_path"] = goal_spatial["ball_path"]
+
+    if clustered_ids:
+        merged = [
+            event for event in merged
+            if str(event.get("id")) not in clustered_ids
+        ]
 
     # Provider may expose the scored attempt as both a goal event and a
     # shot-on-target event. Keep the Goal as the canonical selectable event

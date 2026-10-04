@@ -74,7 +74,7 @@ class FakeServingRepository:
             "events": [
                 {
                     "id": 9001,
-                    "minute": 10,
+                    "minute": 11,
                     "extra_minute": None,
                     "type": "Shot On Target",
                     "text": "Shot On Target",
@@ -117,7 +117,7 @@ class FakeServingRepository:
             "commentary": [
                 {
                     "id": 5001,
-                    "minute": 12,
+                    "minute": 11,
                     "extra_minute": None,
                     "comment": "Bruno Fernandes tests the goalkeeper from outside the box.",
                     "is_goal": False,
@@ -364,6 +364,294 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
         self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
 
+    def test_goal_clusters_same_minute_corner_buildup(self):
+        game = {
+            "home_team": {"id": 1, "name": "Manchester United"},
+            "away_team": {"id": 2, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 31,
+                    "name": "Riccardo Calafiori",
+                    "team_id": 2,
+                    "team_name": "Arsenal",
+                    "team_location": "away",
+                    "jersey_number": 33,
+                    "position_id": 25,
+                    "formation_field": "2:2",
+                    "formation_position": 4,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 150944812,
+                    "minute": 13,
+                    "period_id": 6175643,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 2,
+                    "player_id": 31,
+                    "player": "Riccardo Calafiori",
+                    "is_home": False,
+                    "detail": {
+                        "body_part": "Header",
+                        "period_clock": "46:04",
+                        "period_minutes": 46,
+                        "period_seconds": 4,
+                        "period_elapsed_seconds": 2764,
+                        "period_counts_from": 0,
+                    },
+                },
+                {
+                    "id": 150944811,
+                    "minute": 13,
+                    "period_id": 6175643,
+                    "type": "corner",
+                    "text": "Corner",
+                    "team_id": 2,
+                    "is_home": False,
+                    "detail": {},
+                    "ball_path": {
+                        "start": {"x": 1.0, "y": 98.0},
+                        "end": {"x": 12.0, "y": 55.0},
+                    },
+                },
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7400,
+                    "minute": 13,
+                    "comment": (
+                        "Goal! Arsenal lead 1-0. Riccardo Calafiori scores with a header "
+                        "from very close range into the bottom right corner after a corner."
+                    ),
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 13,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        events = _selectable_events(game)
+        minute_events = [event for event in events if event.get("minute") == 13]
+
+        self.assertEqual(len(minute_events), 1)
+        goal = minute_events[0]
+        self.assertEqual(goal["spatial"]["kind"], "goal")
+        self.assertEqual(goal["display_type"], "Goal")
+        self.assertEqual(goal["player"], "Riccardo Calafiori")
+        self.assertEqual(goal["detail"]["body_part"], "Header")
+        self.assertEqual(goal["detail"]["situation"], "Corner")
+        self.assertEqual(goal["spatial"]["source"], "clustered_corner_goal")
+        self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
+        self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
+
+    def test_saved_comment_reclassifies_raw_off_target_shot(self):
+        game = {
+            "home_team": {"id": 1, "name": "Manchester United"},
+            "away_team": {"id": 2, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Matheus Cunha",
+                    "team_id": 1,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 10,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9500,
+                    "minute": 38,
+                    "period_id": 100,
+                    "type": "shot_off_target",
+                    "text": "Shot Off Target",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Matheus Cunha",
+                    "is_home": True,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7500,
+                    "minute": 38,
+                    "comment": (
+                        "Attempt saved. Matheus Cunha has a left-footed shot from a tough "
+                        "angle on the left, but David Raya saves it in the center of the goal."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 38,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9500)
+
+        self.assertEqual(event["spatial"]["kind"], "shot_on_target")
+        self.assertEqual(event["display_type"], "Shot On Target")
+        self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
+        self.assertEqual(event["detail"]["shot_origin"], "left side of the box")
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+
+    def test_event_minute_13_maps_to_12xx_ball_timer_window(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 41,
+                    "name": "Minute Thirteen",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9160,
+                    "minute": 13,
+                    "extra_minute": None,
+                    "period_id": 100,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 41,
+                    "player": "Minute Thirteen",
+                    "is_home": True,
+                    "detail": {
+                        "body_part": "Right foot",
+                        "period_clock": "46:04",
+                        "period_minutes": 46,
+                        "period_seconds": 4,
+                        "period_elapsed_seconds": 2764,
+                        "period_counts_from": 0,
+                    },
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7060,
+                    "minute": 13,
+                    "comment": "Goal! Minute Thirteen scores from the center of the box.",
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 13,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "12:10", "x": 85.0, "y": 50.0},
+                {"id": 2, "period_id": 100, "timer": "12:16", "x": 99.0, "y": 50.0},
+                {"id": 3, "period_id": 100, "timer": "13:10", "x": 20.0, "y": 20.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9160)
+        timers = [
+            point.get("timer")
+            for point in event.get("spatial", {}).get("ball_track", [])
+        ]
+
+        self.assertIn("12:10", timers)
+        self.assertIn("12:16", timers)
+        self.assertNotIn("13:10", timers)
+
+    def test_period_minutes_seconds_bound_ball_coordinate_join(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Header Scorer",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 5,
+                    "position_id": 25,
+                    "formation_field": "2:2",
+                    "formation_position": 4,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9150,
+                    "minute": 45,
+                    "extra_minute": 2,
+                    "period_id": 100,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Header Scorer",
+                    "is_home": True,
+                    "detail": {
+                        "body_part": "Header",
+                        "period_clock": "46:04",
+                        "period_minutes": 46,
+                        "period_seconds": 4,
+                        "period_elapsed_seconds": 2764,
+                        "period_counts_from": 0,
+                    },
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7050,
+                    "minute": 45,
+                    "extra_minute": 2,
+                    "comment": "Goal! Header Scorer scores with a header from the center of the box.",
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 46,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "45:58", "x": 85.0, "y": 50.0},
+                {"id": 2, "period_id": 100, "timer": "46:03", "x": 99.0, "y": 50.0},
+                # This point is after the period's 46:04 clock and must never
+                # participate in the event track.
+                {"id": 3, "period_id": 100, "timer": "46:08", "x": 20.0, "y": 20.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9150)
+        timers = [
+            point.get("timer")
+            for point in event.get("spatial", {}).get("ball_track", [])
+        ]
+
+        self.assertTrue(timers)
+        self.assertIn("46:03", timers)
+        self.assertNotIn("46:08", timers)
+
     def test_off_target_commentary_guides_shot_without_inventing_player_tracking(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
@@ -514,7 +802,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
         self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 65.0, "y": 52.0})
+        self.assertNotIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
@@ -599,7 +887,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["assist_type"], "cross")
         self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 60.0, "y": 78.0})
+        self.assertNotIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
         self.assertEqual(len(event["spatial"]["ball_track"]), 3)
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
