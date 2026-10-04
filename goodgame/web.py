@@ -521,10 +521,26 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         def score(entry: tuple[dict[str, Any], int]) -> float:
             _, position = entry
-            return min(abs(position - anchor_position) for anchor_position in anchors)
+            weighted: list[float] = []
+            for anchor_position in anchors:
+                delta = anchor_position - position
+                if role == "shooter":
+                    # "Xavi Simons ... takes a shot": prefer the named player
+                    # immediately before the shot/strike wording. Names after
+                    # it are often the goalkeeper/defender in save/block text.
+                    weighted.append(
+                        delta * 0.55 if delta >= 0 else abs(delta) * 1.8 + 15.0
+                    )
+                else:
+                    # "assisted by Richarlison" / "cross from Kudus": the
+                    # assister normally follows the assist/cross wording.
+                    weighted.append(
+                        abs(delta) * 0.55 if delta <= 0 else delta * 1.6 + 10.0
+                    )
+            return min(weighted)
 
         player, position = min(mentions, key=score)
-        if score((player, position)) > 95:
+        if score((player, position)) > 110:
             return None
         return player
 
