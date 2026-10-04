@@ -114,6 +114,17 @@ class FakeServingRepository:
                 }
             ],
             "timeline": [],
+            "commentary": [
+                {
+                    "id": 5001,
+                    "minute": 12,
+                    "extra_minute": None,
+                    "comment": "Bruno Fernandes tests the goalkeeper from outside the box.",
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 9,
+                }
+            ],
             "ball_coordinates": [
                 {"id": 1, "period_id": 100, "timer": "09:55", "x": 61.0, "y": 48.0},
                 {"id": 2, "period_id": 100, "timer": "10:00", "x": 44.0, "y": 74.0},
@@ -273,6 +284,8 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["home_team"]["name"], "Manchester United")
         self.assertEqual(body["players"][0]["player_id"], 10)
         self.assertTrue(body["selectable_events"])
+        self.assertEqual(body["commentary"][0]["id"], 5001)
+        self.assertTrue(body["commentary"][0]["is_important"])
         self.assertEqual(body["match_facts"][0]["category"], "streaks")
         self.assertIn("6 consecutive", body["match_facts"][0]["natural_language"])
         self.assertTrue(body["ai_overviews"])
