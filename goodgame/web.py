@@ -2036,6 +2036,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            coordinate_evidence_track = list(coordinate_track)
             shot_start_index = 0
 
             if coordinate_track and kind == "goal":
@@ -2170,6 +2171,22 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
+            if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                spatial_data = semantic_attempt_spatial(
+                    item,
+                    kind,
+                    detail,
+                    coordinate_evidence_track,
+                    spatial_data,
+                )
+                semantic_track = list(spatial_data.get("ball_track") or [])
+                if semantic_track:
+                    item["ball_track"] = semantic_track
+                    item["ball_path"] = spatial_data.get("ball_path")
+                else:
+                    item.pop("ball_track", None)
+                    item["ball_path"] = spatial_data.get("ball_path")
+
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
