@@ -961,6 +961,93 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         return result
 
+    def extend_goal_track_with_assist(
+        item: dict[str, Any],
+        shot_track: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Prepend the most plausible stored assist pass to a goal shot track.
+
+        The goal event minute does not carry an event second. The shot segment is
+        first located from provider ball-coordinate timers. If the event has a
+        related player/assist, walk backwards from the shot launch through the
+        same period and keep only a short, continuous sequence ending at the
+        scorer's launch point.
+        """
+        if len(shot_track) < 2:
+            return shot_track, 0
+        if not (item.get("related_player_id") or item.get("related_player_name")):
+            return shot_track, 0
+
+        shot_start_seconds = timer_seconds(shot_track[0].get("timer"))
+        if shot_start_seconds is None:
+            return shot_track, 0
+
+        period_id = item.get("period_id")
+        shot_start = shot_track[0]
+        previous_rows = [
+            (point, seconds)
+            for point, seconds in coordinate_stream
+            if seconds < shot_start_seconds
+            and seconds >= shot_start_seconds - 20
+            and (period_id is None or point.get("period_id") == period_id)
+        ]
+        if not previous_rows:
+            return shot_track, 0
+
+        compact: list[tuple[dict[str, Any], int]] = []
+        for point, seconds in previous_rows:
+            if compact:
+                prev = compact[-1][0]
+                if (
+                    abs(float(point["x"]) - float(prev["x"])) < 0.01
+                    and abs(float(point["y"]) - float(prev["y"])) < 0.01
+                ):
+                    continue
+            compact.append((point, seconds))
+
+        selected_reversed: list[tuple[dict[str, Any], int]] = []
+        next_point = shot_start
+        next_seconds = shot_start_seconds
+
+        for point, seconds in reversed(compact):
+            gap = next_seconds - seconds
+            if gap > 10:
+                break
+            step = (
+                (float(next_point["x"]) - float(point["x"])) ** 2
+                + (float(next_point["y"]) - float(point["y"])) ** 2
+            ) ** 0.5
+            if step > 42.0:
+                break
+            selected_reversed.append((point, seconds))
+            next_point = point
+            next_seconds = seconds
+            if shot_start_seconds - seconds >= 15 or len(selected_reversed) >= 3:
+                break
+
+        if not selected_reversed:
+            return shot_track, 0
+
+        prefix = list(reversed(selected_reversed))
+        first = prefix[0][0]
+        progress = (
+            (float(shot_start["x"]) - float(first["x"])) ** 2
+            + (float(shot_start["y"]) - float(first["y"])) ** 2
+        ) ** 0.5
+        if progress < 2.0:
+            return shot_track, 0
+
+        normalized_prefix = [
+            {
+                "x": round(float(point["x"]), 3),
+                "y": round(float(point["y"]), 3),
+                "timer": point.get("timer"),
+                "period_id": point.get("period_id"),
+            }
+            for point, _ in prefix
+        ]
+        return normalized_prefix + shot_track, len(normalized_prefix)
+
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
         player = player_for(item)
