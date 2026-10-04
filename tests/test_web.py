@@ -364,6 +364,78 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
         self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
 
+    def test_period_minutes_seconds_bound_ball_coordinate_join(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Header Scorer",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 5,
+                    "position_id": 25,
+                    "formation_field": "2:2",
+                    "formation_position": 4,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9150,
+                    "minute": 46,
+                    "extra_minute": None,
+                    "period_id": 100,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Header Scorer",
+                    "is_home": True,
+                    "detail": {
+                        "body_part": "Header",
+                        "period_clock": "46:04",
+                        "period_minutes": 46,
+                        "period_seconds": 4,
+                        "period_elapsed_seconds": 2764,
+                        "period_counts_from": 0,
+                    },
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7050,
+                    "minute": 46,
+                    "comment": "Goal! Header Scorer scores with a header from the center of the box.",
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 46,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "45:58", "x": 85.0, "y": 50.0},
+                {"id": 2, "period_id": 100, "timer": "46:03", "x": 99.0, "y": 50.0},
+                # This point is after the period's 46:04 clock and must never
+                # participate in the event track.
+                {"id": 3, "period_id": 100, "timer": "46:08", "x": 20.0, "y": 20.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9150)
+        timers = [
+            point.get("timer")
+            for point in event.get("spatial", {}).get("ball_track", [])
+        ]
+
+        self.assertTrue(timers)
+        self.assertIn("46:03", timers)
+        self.assertNotIn("46:08", timers)
+
     def test_off_target_commentary_guides_shot_without_inventing_player_tracking(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
