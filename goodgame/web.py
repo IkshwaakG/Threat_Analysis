@@ -467,6 +467,67 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "developer_name": stat.get("developer_name"),
             }
 
+    def commentary_player_for_role(
+        text: str,
+        role: str,
+        *,
+        exclude_player_id: Any = None,
+    ) -> dict[str, Any] | None:
+        """Resolve a named player from commentary only when role wording supports it."""
+        lower = str(text or "").casefold()
+        if not lower:
+            return None
+
+        players = [
+            row for row in game.get("players", []) or []
+            if isinstance(row, dict) and row.get("name")
+        ]
+        mentions: list[tuple[dict[str, Any], int]] = []
+        for player in players:
+            if exclude_player_id is not None and str(player.get("player_id")) == str(exclude_player_id):
+                continue
+            name = str(player.get("name") or "").strip()
+            if not name:
+                continue
+            pos = lower.find(name.casefold())
+            if pos >= 0:
+                mentions.append((player, pos))
+
+        if not mentions:
+            return None
+
+        if role == "shooter":
+            anchors = [
+                lower.find(token)
+                for token in (" shot", " strike", " attempt", " header", " shoots", " fires")
+                if lower.find(token) >= 0
+            ]
+        else:
+            anchors = [
+                lower.find(token)
+                for token in (
+                    "assist",
+                    "assisted by",
+                    "comes from",
+                    "cross",
+                    "through ball",
+                    "cutback",
+                )
+                if lower.find(token) >= 0
+            ]
+
+        if not anchors:
+            return None
+
+        def score(entry: tuple[dict[str, Any], int]) -> float:
+            _, position = entry
+            return min(abs(position - anchor_position) for anchor_position in anchors)
+
+        player, position = min(mentions, key=score)
+        if score((player, position)) > 95:
+            return None
+        return player
+
     def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
         try:
             minute = int(item.get("minute"))
@@ -1472,6 +1533,31 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         detail.setdefault(key, value)
                     else:
                         detail[key] = value
+
+                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                    if not item.get("player") or item.get("player_id") is None:
+                        shooter = commentary_player_for_role(comment_text, "shooter")
+                        if shooter is not None:
+                            item["player_id"] = shooter.get("player_id")
+                            item["player"] = shooter.get("name")
+
+                    if (
+                        not item.get("related_player_name")
+                        and item.get("related_player_id") is None
+                        and (
+                            comment_context.get("assist_type")
+                            or "assist" in comment_text.casefold()
+                        )
+                    ):
+                        assister = commentary_player_for_role(
+                            comment_text,
+                            "assist",
+                            exclude_player_id=item.get("player_id"),
+                        )
+                        if assister is not None:
+                            item["related_player_id"] = assister.get("player_id")
+                            item["related_player_name"] = assister.get("name")
+
                 item["commentary_id"] = matched_commentary.get("id")
                 item["commentary_text"] = comment_text
             item["detail"] = detail
