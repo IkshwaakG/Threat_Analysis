@@ -485,13 +485,33 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if kind == "goal" and comment.get("is_goal") is not True:
                 continue
             text = str(comment.get("comment") or "")
+            lower_text = text.casefold()
             score = 0
-            if scorer and scorer in text.casefold():
+            if scorer and scorer in lower_text:
                 score -= 5
-            if kind == "goal" and "goal" in text.casefold():
-                score -= 3
-            if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in text.casefold():
+            if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in lower_text:
                 score -= 2
+
+            kind_tokens = {
+                "goal": ("goal", "scores"),
+                "shot_off_target": ("miss", "wide", "off target"),
+                "shot_on_target": ("shot", "saved", "on target"),
+                "shot": ("shot", "attempt"),
+                "corner": ("corner",),
+                "card": ("card", "booked", "yellow", "red"),
+                "offside": ("offside",),
+                "foul": ("foul", "free kick"),
+                "penalty": ("penalty",),
+            }
+            tokens = kind_tokens.get(kind, ())
+            if any(token in lower_text for token in tokens):
+                score -= 3
+
+            if kind == "goal" and comment.get("is_goal") is not True:
+                score += 4
+            if kind != "goal" and comment.get("is_goal") is True:
+                score += 5
+
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
@@ -560,6 +580,25 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     context["goal_side"] = "right"
                 else:
                     context["goal_side"] = "center"
+                break
+
+        miss_phrases = (
+            ("misses to the left", "left"),
+            ("missed to the left", "left"),
+            ("wide to the left", "left"),
+            ("misses to the right", "right"),
+            ("missed to the right", "right"),
+            ("wide to the right", "right"),
+            ("too high", "high"),
+            ("over the bar", "high"),
+            ("hits the bar", "bar"),
+            ("hits the post", "post"),
+            ("blocked", "blocked"),
+            ("saved", "saved"),
+        )
+        for phrase, outcome in miss_phrases:
+            if phrase in lower:
+                context["shot_outcome_hint"] = outcome
                 break
 
         for phrase in ("through ball", "cross", "cutback", "long ball"):
@@ -646,6 +685,35 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             y = 50.0
         return {"x": x, "y": y}
+
+    def semantic_shot_end(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+        kind: str,
+    ) -> dict[str, float]:
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        hint = str(context.get("shot_outcome_hint") or "").casefold()
+        if hint == "left":
+            y = 50.0 - (GOAL_HALF_WIDTH_PERCENT + 2.6)
+        elif hint == "right":
+            y = 50.0 + (GOAL_HALF_WIDTH_PERCENT + 2.6)
+        elif hint in {"high", "bar"}:
+            y = 50.0
+        elif hint == "post":
+            y = 50.0 + GOAL_HALF_WIDTH_PERCENT
+        elif kind == "shot_off_target":
+            seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
+            offsets = (
+                -(GOAL_HALF_WIDTH_PERCENT + 3.2),
+                -(GOAL_HALF_WIDTH_PERCENT + 1.8),
+                GOAL_HALF_WIDTH_PERCENT + 1.8,
+                GOAL_HALF_WIDTH_PERCENT + 3.2,
+            )
+            y = 50.0 + offsets[seed % len(offsets)]
+        else:
+            y = 50.0
+        return {"x": target_x, "y": y}
 
     def semantic_goal_end(
         item: dict[str, Any],
@@ -1136,20 +1204,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     end_x = 13.0 if start_x < 50.0 else 87.0
                     end = {"x": end_x, "y": box_y}
                 elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
-                    if kind == "shot_off_target":
-                        miss_offsets = (
-                            -(GOAL_HALF_WIDTH_PERCENT + 3.2),
-                            -(GOAL_HALF_WIDTH_PERCENT + 1.8),
-                            GOAL_HALF_WIDTH_PERCENT + 1.8,
-                            GOAL_HALF_WIDTH_PERCENT + 3.2,
-                        )
-                        end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
-                    elif kind == "shot_on_target":
-                        target_offsets = (-4.0, -2.0, 2.0, 4.0)
-                        end_y = 50.0 + target_offsets[seed % len(target_offsets)]
-                    else:
-                        end_y = 50.0
-                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
+                    end = semantic_shot_end(item, team_side, context, kind)
 
             normalized_path = (
                 {"start": start_point, "end": end if isinstance(end, dict) else None}
@@ -1209,33 +1264,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
             start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
-            start = {
+            start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, start_x, 100.0 - start_x),
                 "y": player_anchor["y"] if player_anchor else 50.0,
             }
-            if kind == "shot_off_target":
-                # Keep misses close to the goal rather than firing them toward
-                # a pitch corner. Vary the miss deterministically by event id /
-                # minute so multiple shots do not overlap at one point.
-                seed = (
-                    int(item.get("id") or 0)
-                    + int(item.get("minute") or 0)
-                    + int(item.get("sort_order") or 0)
-                )
-                miss_offsets = (
-                    -(GOAL_HALF_WIDTH_PERCENT + 3.2),
-                    -(GOAL_HALF_WIDTH_PERCENT + 1.8),
-                    GOAL_HALF_WIDTH_PERCENT + 1.8,
-                    GOAL_HALF_WIDTH_PERCENT + 3.2,
-                )
-                end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
-            elif kind == "shot_on_target":
-                seed = int(item.get("id") or item.get("minute") or 0)
-                target_offsets = (-4.0, -2.0, 2.0, 4.0)
-                end_y = 50.0 + target_offsets[seed % len(target_offsets)]
-            else:
-                end_y = 50.0
-            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
+            end = semantic_shot_end(item, team_side, context, kind)
             return {
                 "kind": kind,
                 "source": "inferred",
