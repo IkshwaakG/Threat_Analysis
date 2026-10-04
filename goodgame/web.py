@@ -1050,6 +1050,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
+        context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
         player = player_for(item)
         player_anchor = (
             {"x": float(player["x"]), "y": float(player["y"])}
@@ -1082,7 +1083,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     + int(item.get("sort_order") or 0)
                 )
                 if kind == "goal":
-                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
+                    end = semantic_goal_end(item, team_side, context)
                 elif kind == "corner":
                     start_x = float(start_point.get("x") or 50.0)
                     start_y = float(start_point.get("y") or 50.0)
@@ -1121,16 +1122,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             }
 
         if kind == "goal":
-            # Until provider ball coordinates are available, keep this deliberately
-            # simple and explicit: penalty spot -> attacking goal.
-            start = {
+            # When no event-attached coordinate exists, use commentary semantics
+            # (shot origin/goal side) before falling back to the penalty spot.
+            start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, PENALTY_SPOT_RIGHT_X, PENALTY_SPOT_LEFT_X),
                 "y": 50.0,
             }
-            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
+            end = semantic_goal_end(item, team_side, context)
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": player_anchor or start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": item.get("player_id"),
