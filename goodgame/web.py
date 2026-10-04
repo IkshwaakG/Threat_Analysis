@@ -1007,6 +1007,246 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             y = 50.0
         return {"x": target_x, "y": y}
 
+    def fixture_role_anchor(
+        item: dict[str, Any],
+        player_id: Any,
+        role: str,
+        reference: dict[str, float] | None = None,
+    ) -> dict[str, float] | None:
+        if player_id is None:
+            return None
+        try:
+            player = players_by_id.get(int(player_id))
+        except (TypeError, ValueError):
+            player = None
+        if player is None:
+            return None
+
+        team_side = side(item)
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        direction = 1.0 if target_x > 50.0 else -1.0
+        try:
+            base_y = float(player.get("y"))
+        except (TypeError, ValueError):
+            base_y = 50.0
+
+        role_name = str(player.get("role") or "").casefold()
+        if role == "shooter":
+            distance = 20.0 if "attack" in role_name else 25.0 if "mid" in role_name else 30.0
+            x = target_x - direction * distance
+            y = base_y
+        else:
+            if reference is not None:
+                x = float(reference["x"]) - direction * 18.0
+                y = base_y * 0.65 + float(reference["y"]) * 0.35
+            else:
+                x = target_x - direction * 34.0
+                y = base_y
+
+        return {
+            "x": round(max(2.0, min(98.0, x)), 3),
+            "y": round(max(2.0, min(98.0, y)), 3),
+        }
+
+    def fuse_with_coordinate_evidence(
+        expected: dict[str, float] | None,
+        coordinate_track: list[dict[str, Any]],
+        *,
+        max_distance: float,
+        weight: float = 0.25,
+    ) -> dict[str, float] | None:
+        if expected is None or not coordinate_track:
+            return expected
+
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for point in coordinate_track:
+            if not isinstance(point, dict):
+                continue
+            try:
+                px = float(point["x"])
+                py = float(point["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            distance = (
+                (px - float(expected["x"])) ** 2
+                + (py - float(expected["y"])) ** 2
+            ) ** 0.5
+            if distance <= max_distance:
+                candidates.append((distance, point))
+
+        if not candidates:
+            return expected
+
+        _, nearest = min(candidates, key=lambda row: row[0])
+        px = float(nearest["x"])
+        py = float(nearest["y"])
+        return {
+            "x": round(float(expected["x"]) * (1.0 - weight) + px * weight, 3),
+            "y": round(float(expected["y"]) * (1.0 - weight) + py * weight, 3),
+        }
+
+    def semantic_attempt_spatial(
+        item: dict[str, Any],
+        kind: str,
+        context: dict[str, Any],
+        coordinate_track: list[dict[str, Any]],
+        base_spatial: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build player-led attempt geometry from all available evidence.
+
+        Event + commentary define the action and actors. Fixture/lineup facts
+        provide fallback player locations. ballCoordinates may refine a
+        supported semantic location, but never create the story by themselves.
+        """
+        team_side = side(item)
+
+        semantic_shooter = semantic_shot_start(item, team_side, context)
+        explicit_shooter = player_position_anchor(item, item.get("player_id"))
+        fallback_shooter = fixture_role_anchor(item, item.get("player_id"), "shooter")
+        shooter = semantic_shooter or explicit_shooter or fallback_shooter
+        if shooter is not None:
+            shooter = fuse_with_coordinate_evidence(
+                shooter,
+                coordinate_track,
+                max_distance=11.0 if semantic_shooter is not None else 7.0,
+                weight=0.20 if semantic_shooter is not None else 0.12,
+            )
+
+        if kind == "goal":
+            outcome = semantic_goal_end(item, team_side, context)
+        else:
+            outcome = semantic_shot_end(item, team_side, context, kind)
+
+        explicit_outcome = bool(
+            context.get("goal_target")
+            or context.get("shot_outcome_hint")
+        )
+        if not explicit_outcome and coordinate_track:
+            outcome = fuse_with_coordinate_evidence(
+                outcome,
+                [coordinate_track[-1]],
+                max_distance=10.0,
+                weight=0.30,
+            ) or outcome
+
+        has_assist = bool(
+            item.get("related_player_id")
+            or item.get("related_player_name")
+            or item.get("assist")
+        )
+        assist = None
+        if has_assist:
+            explicit_assist = player_position_anchor(
+                item,
+                item.get("related_player_id"),
+            )
+            semantic_assist = semantic_assist_anchor(item, team_side, context)
+            fallback_assist = fixture_role_anchor(
+                item,
+                item.get("related_player_id"),
+                "assist",
+                shooter,
+            )
+            assist = semantic_assist or explicit_assist or fallback_assist
+            if assist is not None:
+                assist = fuse_with_coordinate_evidence(
+                    assist,
+                    coordinate_track[:-1],
+                    max_distance=14.0 if semantic_assist is not None else 9.0,
+                    weight=0.18 if semantic_assist is not None else 0.10,
+                )
+
+        if shooter is None:
+            # A known event actor should normally resolve through fixture data,
+            # but if it cannot, keep the existing inferred geometry rather than
+            # pretending a random ball coordinate is the player's body.
+            return base_spatial
+
+        if assist is not None:
+            separation = (
+                (float(assist["x"]) - float(shooter["x"])) ** 2
+                + (float(assist["y"]) - float(shooter["y"])) ** 2
+            ) ** 0.5
+            if separation < 6.0:
+                target_x = attacking_x(item, team_side, 100.0, 0.0)
+                direction = 1.0 if target_x > 50.0 else -1.0
+                assist = {
+                    "x": round(max(2.0, min(98.0, float(shooter["x"]) - direction * 14.0)), 3),
+                    "y": round(max(2.0, min(98.0, float(assist["y"]))), 3),
+                }
+
+        points: list[dict[str, Any]] = []
+        if assist is not None:
+            points.append({
+                "x": float(assist["x"]),
+                "y": float(assist["y"]),
+                "timer": None,
+                "period_id": item.get("period_id"),
+            })
+        points.append({
+            "x": float(shooter["x"]),
+            "y": float(shooter["y"]),
+            "timer": None,
+            "period_id": item.get("period_id"),
+        })
+        points.append({
+            "x": float(outcome["x"]),
+            "y": float(outcome["y"]),
+            "timer": coordinate_track[-1].get("timer") if coordinate_track else None,
+            "period_id": item.get("period_id"),
+        })
+
+        shot_start_index = 1 if assist is not None else 0
+        spatial_data = dict(base_spatial)
+        spatial_data.update({
+            "kind": kind,
+            "source": "semantic_fused" if coordinate_track else "semantic_reconstructed",
+            "anchor": points[0],
+            "ball_track": points,
+            "ball_path": {
+                "start": points[0],
+                "end": points[-1],
+            },
+            "shot_actor_anchor": {
+                "x": float(shooter["x"]),
+                "y": float(shooter["y"]),
+            },
+            "shot_start_index": shot_start_index,
+            "phases": (
+                [
+                    {"kind": "assist", "start_index": 0, "end_index": 1},
+                    {"kind": "shot", "start_index": 1, "end_index": 2},
+                ]
+                if assist is not None
+                else [
+                    {"kind": "shot", "start_index": 0, "end_index": 1}
+                ]
+            ),
+            "coordinate_support": {
+                "points": len(coordinate_track),
+                "terminal_timer": (
+                    coordinate_track[-1].get("timer")
+                    if coordinate_track
+                    else None
+                ),
+            },
+        })
+        if assist is not None:
+            spatial_data["assist_actor_anchor"] = {
+                "x": float(assist["x"]),
+                "y": float(assist["y"]),
+            }
+        else:
+            spatial_data.pop("assist_actor_anchor", None)
+
+        marker = outcome_marker_for_shot(item, context, points[-1], kind)
+        if marker:
+            spatial_data["outcome_marker"] = marker
+        else:
+            spatial_data.pop("outcome_marker", None)
+
+        return spatial_data
+
     def event_coordinate_track(
         item: dict[str, Any],
         spatial_data: dict[str, Any],
