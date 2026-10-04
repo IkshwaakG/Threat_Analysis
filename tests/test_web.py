@@ -422,6 +422,190 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
         self.assertFalse(event.get("player_positions"))
 
+    def test_assisted_saved_shot_splits_pass_shot_and_save(self):
+        game = {
+            "home_team": {"id": 1, "name": "Tottenham Hotspur"},
+            "away_team": {"id": 2, "name": "Brentford"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Xavi Simons",
+                    "team_id": 1,
+                    "team_name": "Tottenham Hotspur",
+                    "team_location": "home",
+                    "jersey_number": 7,
+                    "position_id": 26,
+                    "formation_field": "3:2",
+                    "formation_position": 6,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 11,
+                    "name": "Richarlison",
+                    "team_id": 1,
+                    "team_name": "Tottenham Hotspur",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 30,
+                    "name": "Caoimhin Kelleher",
+                    "team_id": 2,
+                    "team_name": "Brentford",
+                    "team_location": "away",
+                    "jersey_number": 1,
+                    "position_id": 24,
+                    "formation_field": "1:1",
+                    "formation_position": 1,
+                    "match_stats": [],
+                },
+            ],
+            "events": [
+                {
+                    "id": 9300,
+                    "minute": 62,
+                    "period_id": 200,
+                    "type": "shot_on_target",
+                    "text": "Shot On Target",
+                    "team_id": 1,
+                    "player_id": None,
+                    "player": None,
+                    "related_player_id": None,
+                    "related_player_name": None,
+                    "is_home": True,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7200,
+                    "minute": 62,
+                    "comment": (
+                        "A fresh offensive move unfolds as Xavi Simons from Tottenham Hotspur "
+                        "takes a right-footed shot from outside the penalty area. The attempt is "
+                        "expertly denied by Brentford's Caoimhin Kelleher, who makes a save in "
+                        "the top right corner. The assist for this play comes from Richarlison."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 30,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 200, "timer": "61:20", "x": 65.0, "y": 52.0},
+                {"id": 2, "period_id": 200, "timer": "61:24", "x": 24.0, "y": 50.0},
+                {"id": 3, "period_id": 200, "timer": "61:27", "x": 4.0, "y": 46.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9300)
+
+        self.assertEqual(event["player"], "Xavi Simons")
+        self.assertEqual(event["related_player_name"], "Richarlison")
+        self.assertEqual(event["detail"]["body_part"], "Right foot")
+        self.assertEqual(event["detail"]["shot_origin"], "outside the box")
+        self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
+        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["shot_start_index"], 1)
+        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 65.0, "y": 52.0})
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
+        self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
+        self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+        self.assertLess(event["spatial"]["outcome_marker"]["x"], 10.0)
+
+    def test_cross_then_blocked_shot_adds_missing_shot_phase(self):
+        game = {
+            "home_team": {"id": 1, "name": "Tottenham Hotspur"},
+            "away_team": {"id": 2, "name": "Brentford"},
+            "players": [
+                {
+                    "player_id": 11,
+                    "name": "Richarlison",
+                    "team_id": 1,
+                    "team_name": "Tottenham Hotspur",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 12,
+                    "name": "Mohammed Kudus",
+                    "team_id": 1,
+                    "team_name": "Tottenham Hotspur",
+                    "team_location": "home",
+                    "jersey_number": 20,
+                    "position_id": 26,
+                    "formation_field": "3:1",
+                    "formation_position": 5,
+                    "match_stats": [],
+                },
+            ],
+            "events": [
+                {
+                    "id": 9400,
+                    "minute": 14,
+                    "period_id": 100,
+                    "type": "shot_off_target",
+                    "text": "Shot Off Target",
+                    "team_id": 1,
+                    "player_id": None,
+                    "player": None,
+                    "related_player_id": None,
+                    "related_player_name": None,
+                    "is_home": True,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7300,
+                    "minute": 14,
+                    "comment": (
+                        "A shot is deflected. Richarlison from Tottenham Hotspur attempts a "
+                        "right-footed strike from the middle of the penalty area, but it is "
+                        "blocked. The assist came from Mohammed Kudus, who delivered a cross."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 14,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "13:20", "x": 60.0, "y": 78.0},
+                {"id": 2, "period_id": 100, "timer": "13:25", "x": 86.0, "y": 50.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9400)
+
+        self.assertEqual(event["player"], "Richarlison")
+        self.assertEqual(event["related_player_name"], "Mohammed Kudus")
+        self.assertEqual(event["detail"]["shot_origin"], "center of the box")
+        self.assertEqual(event["detail"]["shot_outcome_hint"], "blocked")
+        self.assertEqual(event["detail"]["assist_type"], "cross")
+        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["shot_start_index"], 1)
+        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 60.0, "y": 78.0})
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
+        self.assertEqual(len(event["spatial"]["ball_track"]), 3)
+        self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
+        self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
             response = self.client.get(
