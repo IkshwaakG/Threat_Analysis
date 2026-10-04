@@ -392,3 +392,17 @@ def test_shot_traversal_starts_at_launch_and_moves_forward():
     # 93 is the local closest approach; 72 is post-save/rebound movement.
     assert distances[3] < distances[2]
     assert distances[4] > distances[3]
+
+
+def test_corner_track_rejects_large_provider_jump():
+    # A corner may move from the flag into the box, but a large unrelated
+    # provider jump should terminate the stored segment.
+    start = (99.0, 2.0)
+    good = (88.0, 24.0)
+    bad = (72.0, 78.0)
+
+    def distance(a, b):
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+    assert distance(start, good) < 34.0
+    assert distance(good, bad) > 34.0
