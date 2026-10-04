@@ -113,7 +113,9 @@ class DemoServingRepository:
         value = self.data.get("game_views", {}).get(str(fixture_id))
         if value is None:
             raise LookupError(f"Fixture {fixture_id} is not packaged in the demo snapshot")
-        return value
+        result = dict(value)
+        result.setdefault("head_to_head", [])
+        return result
 
     def get_team_view(self, team_id: int, season_id: int, league_id: int | None = None) -> dict[str, Any]:
         key = f"{team_id}:{season_id}:{league_id or 'all'}"
