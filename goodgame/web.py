@@ -2439,131 +2439,137 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             matched["ball_path"] = matched_spatial["ball_path"]
             matched["spatial"] = matched_spatial
 
-    def same_occurrence(a: dict[str, Any], b: dict[str, Any]) -> bool:
-        return (
-            a.get("minute") == b.get("minute")
-            and a.get("extra_minute") == b.get("extra_minute")
-            and a.get("team_id") == b.get("team_id")
+    def semantic_event_kind(event: dict[str, Any]) -> str:
+        return str(
+            (event.get("spatial") or {}).get("kind")
+            or event.get("semantic_type")
+            or category(event)
         )
 
-    def spatial_points(event: dict[str, Any]) -> list[dict[str, Any]]:
-        spatial_data = event.get("spatial") or {}
-        track = [
-            dict(point)
-            for point in spatial_data.get("ball_track", []) or []
-            if isinstance(point, dict)
-        ]
-        if track:
-            return track
-        path = spatial_data.get("ball_path")
-        if not isinstance(path, dict):
-            return []
-        result: list[dict[str, Any]] = []
-        for point in (path.get("start"), path.get("end")):
-            if isinstance(point, dict) and point.get("x") is not None and point.get("y") is not None:
-                result.append({
-                    "x": float(point["x"]),
-                    "y": float(point["y"]),
-                    "timer": point.get("timer"),
-                    "period_id": point.get("period_id") or event.get("period_id"),
-                })
-        return result
+    # Collapse duplicate timeline/stat rows that describe the same attempt.
+    # The real fixture payload can expose a saved shot simultaneously as raw
+    # Shot On Target and Shot Off Target rows; both then attach to the same
+    # commentary. One real-world attempt must produce one selectable event.
+    attempt_kinds = {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}
+    semantic_priority = {
+        "goal": 6,
+        "penalty": 5,
+        "shot_on_target": 4,
+        "shot_off_target": 3,
+        "shot": 2,
+    }
 
-    # A goal may be represented by a Goal event plus a Corner/Shot row from
-    # the same minute. When the goal comment/facts say it followed a corner,
-    # fold that delivery into the Goal instead of showing "Corner" as the
-    # canonical event.
-    clustered_ids: set[str] = set()
-    provider_goals = [
-        event for event in merged
-        if (event.get("spatial") or {}).get("kind") == "goal"
-    ]
-    for goal in provider_goals:
-        detail = goal.get("detail") if isinstance(goal.get("detail"), dict) else {}
-        situation_text = " ".join([
-            str(detail.get("situation") or ""),
-            str(goal.get("commentary_text") or ""),
-        ]).casefold()
-        if "corner" not in situation_text:
+    grouped_attempts: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for event in merged:
+        current_kind = semantic_event_kind(event)
+        if current_kind not in attempt_kinds:
+            continue
+        commentary_id = event.get("commentary_id")
+        commentary_text = " ".join(str(event.get("commentary_text") or "").split()).casefold()
+        if commentary_id is None and not commentary_text:
+            continue
+        actor_key = event.get("player_id") or str(event.get("player") or "").strip().casefold()
+        evidence_key = (
+            event.get("team_id"),
+            actor_key,
+            str(commentary_id) if commentary_id is not None else commentary_text,
+        )
+        grouped_attempts.setdefault(evidence_key, []).append(event)
+
+    duplicate_object_ids: set[int] = set()
+    for group in grouped_attempts.values():
+        if len(group) < 2:
             continue
 
-        related_corners = [
-            event for event in merged
-            if event is not goal
-            and same_occurrence(goal, event)
-            and (event.get("spatial") or {}).get("kind") == "corner"
-        ]
-        if not related_corners:
-            continue
+        def canonical_score(event: dict[str, Any]) -> tuple[int, int, int, int, int]:
+            current_kind = semantic_event_kind(event)
+            raw_agreement = 0 if event.get("original_spatial_kind") else 1
+            source_score = (
+                3 if event.get("source_kind") == "event"
+                else 2 if event.get("source_kind") == "timeline"
+                else 1
+            )
+            actor_score = 1 if event.get("player_id") is not None or event.get("player") else 0
+            assist_score = 1 if event.get("related_player_id") is not None or event.get("related_player_name") else 0
+            return (
+                semantic_priority.get(current_kind, 0),
+                raw_agreement,
+                source_score,
+                actor_score,
+                assist_score,
+            )
 
-        corner = max(
-            related_corners,
-            key=lambda event: len(spatial_points(event)),
-        )
-        clustered_ids.add(str(corner.get("id")))
+        canonical = max(group, key=canonical_score)
+        canonical_detail = dict(canonical.get("detail") or {})
+        for duplicate in group:
+            if duplicate is canonical:
+                continue
+            duplicate_object_ids.add(id(duplicate))
+            for key in (
+                "player_id",
+                "player",
+                "related_player_id",
+                "related_player_name",
+                "assist",
+                "scorer",
+            ):
+                if not canonical.get(key) and duplicate.get(key):
+                    canonical[key] = duplicate.get(key)
+            for key, value in (duplicate.get("detail") or {}).items():
+                canonical_detail.setdefault(key, value)
+        canonical["detail"] = canonical_detail
 
-        goal_spatial = goal.get("spatial") or {}
-        corner_points = spatial_points(corner)
-        semantic_start = (
-            goal_spatial.get("shot_actor_anchor")
-            or semantic_shot_start(goal, side(goal), detail)
-        )
-        goal_end = semantic_goal_end(goal, side(goal), detail)
-
-        combined: list[dict[str, Any]] = list(corner_points)
-        if semantic_start is not None:
-            if not combined or (
-                (float(combined[-1]["x"]) - float(semantic_start["x"])) ** 2
-                + (float(combined[-1]["y"]) - float(semantic_start["y"])) ** 2
-            ) ** 0.5 > 1.5:
-                combined.append({
-                    "x": round(float(semantic_start["x"]), 3),
-                    "y": round(float(semantic_start["y"]), 3),
-                    "timer": None,
-                    "period_id": goal.get("period_id"),
-                })
-        shot_start_index = max(0, len(combined) - 1)
-
-        if not combined or (
-            (float(combined[-1]["x"]) - float(goal_end["x"])) ** 2
-            + (float(combined[-1]["y"]) - float(goal_end["y"])) ** 2
-        ) ** 0.5 > 1.0:
-            combined.append({
-                "x": round(float(goal_end["x"]), 3),
-                "y": round(float(goal_end["y"]), 3),
-                "timer": None,
-                "period_id": goal.get("period_id"),
-            })
-
-        if len(combined) >= 2:
-            goal_spatial["source"] = "clustered_corner_goal"
-            goal_spatial["ball_track"] = combined
-            goal_spatial["anchor"] = combined[0]
-            goal_spatial["ball_path"] = {
-                "start": combined[0],
-                "end": combined[-1],
-            }
-            goal_spatial["shot_start_index"] = shot_start_index
-            goal_spatial["phases"] = [
-                {
-                    "kind": "assist",
-                    "start_index": 0,
-                    "end_index": shot_start_index,
-                },
-                {
-                    "kind": "shot",
-                    "start_index": shot_start_index,
-                    "end_index": len(combined) - 1,
-                },
-            ]
-            goal["spatial"] = goal_spatial
-            goal["ball_track"] = combined
-            goal["ball_path"] = goal_spatial["ball_path"]
-
-    if clustered_ids:
+    if duplicate_object_ids:
         merged = [
             event for event in merged
-            if str(event.get("id")) not in clustered_ids
+            if id(event) not in duplicate_object_ids
+        ]
+
+    # Corners/free-kicks are setup context when a following attempt explicitly
+    # says it came from that restart. Keep the shot/goal as the selectable
+    # event and its detail.situation as the cause; do not render a second,
+    # misleading standalone Corner using unrelated ball-coordinate geometry.
+    context_event_ids: set[int] = set()
+    corner_context_attempts = [
+        event for event in merged
+        if semantic_event_kind(event) in attempt_kinds
+        and str((event.get("detail") or {}).get("situation") or "").casefold() == "corner"
+    ]
+
+    for corner in merged:
+        if semantic_event_kind(corner) != "corner":
+            continue
+        try:
+            corner_minute = int(corner.get("minute"))
+        except (TypeError, ValueError):
+            continue
+
+        linked = False
+        for attempt in corner_context_attempts:
+            if attempt.get("team_id") != corner.get("team_id"):
+                continue
+            if (
+                corner.get("period_id") is not None
+                and attempt.get("period_id") is not None
+                and corner.get("period_id") != attempt.get("period_id")
+            ):
+                continue
+            try:
+                attempt_minute = int(attempt.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            minute_delta = attempt_minute - corner_minute
+            if 0 <= minute_delta <= 1:
+                linked = True
+                break
+
+        if linked:
+            context_event_ids.add(id(corner))
+
+    if context_event_ids:
+        merged = [
+            event for event in merged
+            if id(event) not in context_event_ids
         ]
 
     # Provider may expose the scored attempt as both a goal event and a
