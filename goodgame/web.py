@@ -1860,9 +1860,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if not item.get("related_player_name") and item.get("related_player_id") is not None:
                 item["related_player_name"] = player_name_for_id(item.get("related_player_id"))
 
+            item["semantic_type"] = kind
             if kind == "goal":
                 # Normalize the semantic event so UI never presents a scored
-                # goal as merely a shot on target.
+                # goal as merely a corner/shot.
                 item["display_type"] = "Goal"
                 item["text"] = "Goal"
                 scorer = item.get("player")
@@ -1871,6 +1872,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item["scorer"] = scorer
                 if assist and assist != scorer:
                     item["assist"] = assist
+            elif kind == "shot_on_target":
+                item["display_type"] = "Shot On Target"
+            elif kind == "shot_off_target":
+                item["display_type"] = "Shot Off Target"
+            elif kind == "shot":
+                item["display_type"] = "Shot"
+            elif kind == "corner":
+                item["display_type"] = "Corner"
             else:
                 item["display_type"] = item.get("text") or item.get("type") or kind
 
