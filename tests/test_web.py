@@ -355,12 +355,72 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["commentary_id"], 7001)
         self.assertEqual(goal["trend_context"][0]["participant_name"], "Manchester United")
         self.assertEqual(goal["spatial"]["source"], "stored_assist_goal")
+        self.assertEqual(goal["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
+        self.assertNotEqual(goal["spatial"]["shot_actor_anchor"], goal["spatial"]["ball_track"][-1])
         self.assertGreater(goal["spatial"]["shot_start_index"], 0)
         self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
         shot_index = goal["spatial"]["shot_start_index"]
         self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
         self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
+
+    def test_off_target_commentary_guides_shot_without_inventing_player_tracking(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 20,
+                    "name": "Shooter",
+                    "team_id": 2,
+                    "team_name": "Away",
+                    "team_location": "away",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9200,
+                    "minute": 61,
+                    "period_id": 200,
+                    "type": "shot_off_target",
+                    "text": "Shot off target",
+                    "team_id": 2,
+                    "player_id": 20,
+                    "player": "Shooter",
+                    "is_home": False,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7100,
+                    "minute": 61,
+                    "comment": "Shooter's right-footed shot from outside the box misses to the right.",
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 20,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9200)
+        self.assertEqual(event["commentary_id"], 7100)
+        self.assertEqual(event["detail"]["body_part"], "Right foot")
+        self.assertEqual(event["detail"]["shot_origin"], "outside the box")
+        self.assertEqual(event["detail"]["shot_outcome_hint"], "right")
+        self.assertEqual(event["spatial"]["source"], "commentary_inferred")
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
+        self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
+        self.assertFalse(event.get("player_positions"))
 
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
