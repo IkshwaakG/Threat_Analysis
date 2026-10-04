@@ -25,6 +25,7 @@ class ServingArchitectureTests(unittest.TestCase):
         self.assertIn('"video_reference": video_reference', serving)
         self.assertIn('"video_events": video_events', serving)
         self.assertIn('self._table("fixture_participants")', serving)
+        self.assertIn('"head_to_head": head_to_head', serving)
         self.assertIn('self._table("fixture_lineups")', serving)
         self.assertIn('"ball_coordinates": ball_coordinates', serving)
 
