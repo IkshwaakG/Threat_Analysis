@@ -544,6 +544,58 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
+    def commentary_action_kind(comment: dict[str, Any]) -> str:
+        text = str(comment.get("comment") or "").casefold()
+        if comment.get("is_goal") is True or text.startswith("goal!") or " scores " in f" {text} ":
+            return "goal"
+
+        if (
+            "attempt saved" in text
+            or " is saved " in f" {text} "
+            or " saved by " in f" {text} "
+            or "makes a save" in text
+            or "denied by" in text
+        ):
+            return "shot_on_target"
+
+        if (
+            "attempt missed" in text
+            or " misses " in f" {text} "
+            or " missed " in f" {text} "
+            or "wide to the" in text
+            or "goes wide" in text
+            or "too high" in text
+            or "over the bar" in text
+        ):
+            return "shot_off_target"
+
+        if (
+            " shot " in f" {text} "
+            or "header" in text
+            or "heads the ball" in text
+            or "headed the ball" in text
+            or "attempt blocked" in text
+        ):
+            return "shot"
+
+        corner_action = (
+            "wins a corner" in text
+            or "win a corner" in text
+            or "corner awarded" in text
+            or "concedes a corner" in text
+            or ("corner" in text and "after" in text and "concedes" in text)
+        )
+        if corner_action:
+            return "corner"
+
+        if "offside" in text:
+            return "offside"
+        if "yellow card" in text or "red card" in text or "booked" in text:
+            return "card"
+        if "foul" in text or "free kick" in text:
+            return "foul"
+        return "event"
+
     def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
         try:
             minute = int(item.get("minute"))
@@ -557,18 +609,31 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 comment_minute = int(comment.get("minute"))
             except (TypeError, ValueError):
                 continue
-            if comment_minute != minute:
-                continue
-            if kind == "goal" and comment.get("is_goal") is not True:
-                continue
-            if kind != "goal" and comment.get("is_goal") is True:
-                # A scored action may also have a corner/shot row in the same
-                # minute. Keep the goal commentary for the Goal event and
-                # cluster the related rows later; do not relabel the corner.
-                continue
+            action_kind = commentary_action_kind(comment)
+            minute_delta = abs(comment_minute - minute)
+            if kind == "corner":
+                # Corner timeline rows are occasionally one display minute after
+                # the commentary. Allow that small offset, but only for a true
+                # corner-award comment. Never attach "shot ... after a corner".
+                if minute_delta > 1 or action_kind != "corner":
+                    continue
+            else:
+                if comment_minute != minute:
+                    continue
+                if kind == "goal" and action_kind != "goal":
+                    continue
+                if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind not in {
+                    "shot",
+                    "shot_on_target",
+                    "shot_off_target",
+                }:
+                    continue
+                if kind not in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind == "goal":
+                    continue
+
             text = str(comment.get("comment") or "")
             lower_text = text.casefold()
-            score = 0
+            score = minute_delta * 2
             if scorer and scorer in lower_text:
                 score -= 5
             if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in lower_text:
@@ -589,8 +654,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if any(token in lower_text for token in tokens):
                 score -= 3
 
-            if kind == "goal" and comment.get("is_goal") is not True:
-                score += 4
+            if action_kind == kind:
+                score -= 5
+            elif kind in {"shot", "shot_on_target", "shot_off_target"} and action_kind.startswith("shot"):
+                score -= 2
+
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
