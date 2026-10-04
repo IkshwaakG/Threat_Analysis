@@ -812,7 +812,9 @@ class BigQueryServingRepository:
                 pressure,
                 xg_fixture,
                 trends,
-                expected_lineups
+                expected_lineups,
+                match_facts,
+                ai_overviews
               FROM {self._table("fixture_advanced")}
               WHERE fixture_id = @fixture_id
               LIMIT 1
@@ -1255,7 +1257,9 @@ class BigQueryServingRepository:
                 a.pressure,
                 a.xg_fixture,
                 a.trends,
-                a.expected_lineups
+                a.expected_lineups,
+                a.match_facts,
+                a.ai_overviews
               )) AS payload
             FROM fixture_advanced a
 
@@ -1553,6 +1557,8 @@ class BigQueryServingRepository:
             "xg_fixture": advanced.get("xg_fixture"),
             "trends": advanced.get("trends"),
             "expected_lineups": advanced.get("expected_lineups"),
+            "match_facts": advanced.get("match_facts") or [],
+            "ai_overviews": advanced.get("ai_overviews") or [],
             "video_reference": video_reference,
             "video_events": video_events,
             "standings": standings,
