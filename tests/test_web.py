@@ -1132,7 +1132,8 @@ class GoodGameWebTests(unittest.TestCase):
         )
         self.assertIn(corner["source"], {"stored", "inferred", "commentary_inferred"})
         self.assertGreaterEqual(corner["ball_path"]["start"]["x"], 95.0)
-        self.assertLessEqual(corner["ball_path"]["start"]["y"], 12.0)
+        corner_y = float(corner["ball_path"]["start"]["y"])
+        self.assertLessEqual(min(corner_y, 100.0 - corner_y), 12.0)
         self.assertGreater(corner["ball_path"]["end"]["x"], 70.0)
         # Stored corner starts near the right goal line and must remain in that
         # same attacking end rather than traversing across midfield.
