@@ -618,6 +618,8 @@ class BigQueryServingRepository:
             WITH participants AS (
               SELECT
                 fp.fixture_id,
+                MAX(IF(fp.location = 'home', fp.team_id, NULL)) AS home_team_id,
+                MAX(IF(fp.location = 'away', fp.team_id, NULL)) AS away_team_id,
                 MAX(IF(fp.location = 'home', t.name, NULL)) AS home_team,
                 MAX(IF(fp.location = 'away', t.name, NULL)) AS away_team
               FROM {self._table("fixture_participants")} fp
@@ -632,6 +634,8 @@ class BigQueryServingRepository:
             SELECT
               f.fixture_id AS id,
               CAST(f.starting_at AS STRING) AS date,
+              p.home_team_id,
+              p.away_team_id,
               COALESCE(p.home_team, SPLIT(f.name, ' vs ')[SAFE_OFFSET(0)], 'Home') AS home_team,
               COALESCE(p.away_team, SPLIT(f.name, ' vs ')[SAFE_OFFSET(1)], 'Away') AS away_team
             FROM {self._table("fixtures")} f
