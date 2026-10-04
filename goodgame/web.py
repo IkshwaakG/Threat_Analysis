@@ -1256,7 +1256,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             end = {"x": end_x, "y": box_y}
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": None,
