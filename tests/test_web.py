@@ -509,6 +509,76 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_origin"], "left side of the box")
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
 
+    def test_event_minute_13_maps_to_12xx_ball_timer_window(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 41,
+                    "name": "Minute Thirteen",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9160,
+                    "minute": 13,
+                    "extra_minute": None,
+                    "period_id": 100,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 41,
+                    "player": "Minute Thirteen",
+                    "is_home": True,
+                    "detail": {
+                        "body_part": "Right foot",
+                        "period_clock": "46:04",
+                        "period_minutes": 46,
+                        "period_seconds": 4,
+                        "period_elapsed_seconds": 2764,
+                        "period_counts_from": 0,
+                    },
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7060,
+                    "minute": 13,
+                    "comment": "Goal! Minute Thirteen scores from the center of the box.",
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 13,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "12:10", "x": 85.0, "y": 50.0},
+                {"id": 2, "period_id": 100, "timer": "12:16", "x": 99.0, "y": 50.0},
+                {"id": 3, "period_id": 100, "timer": "13:10", "x": 20.0, "y": 20.0},
+            ],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9160)
+        timers = [
+            point.get("timer")
+            for point in event.get("spatial", {}).get("ball_track", [])
+        ]
+
+        self.assertIn("12:10", timers)
+        self.assertIn("12:16", timers)
+        self.assertNotIn("13:10", timers)
+
     def test_period_minutes_seconds_bound_ball_coordinate_join(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
@@ -531,7 +601,7 @@ class GoodGameWebTests(unittest.TestCase):
                 {
                     "id": 9150,
                     "minute": 45,
-                    "extra_minute": 1,
+                    "extra_minute": 2,
                     "period_id": 100,
                     "type": "goal",
                     "text": "Goal",
@@ -554,7 +624,7 @@ class GoodGameWebTests(unittest.TestCase):
                 {
                     "id": 7050,
                     "minute": 45,
-                    "extra_minute": 1,
+                    "extra_minute": 2,
                     "comment": "Goal! Header Scorer scores with a header from the center of the box.",
                     "is_goal": True,
                     "is_important": True,
