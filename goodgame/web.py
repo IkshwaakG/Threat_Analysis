@@ -685,6 +685,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         event_period_id = item.get("period_id")
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
+        detail_context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        semantic_launch = semantic_shot_start(item, team_side, detail_context)
 
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -825,11 +827,18 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 # Favor a strong, compact shot movement whose terminal sample
                 # is near the correct goal and temporally close to the event.
                 duration = max(1, end_second - launch_second)
+                launch_semantic_distance = 0.0
+                if semantic_launch is not None:
+                    launch_semantic_distance = (
+                        (float(launch_point["x"]) - float(semantic_launch["x"])) ** 2
+                        + (float(launch_point["y"]) - float(semantic_launch["y"])) ** 2
+                    ) ** 0.5
                 score = (
                     end_distance * 4.0
                     + center_distance * (1.7 if on_target else 0.0)
                     + time_score(launch_second) * 0.2
                     + duration * 0.08
+                    + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                     - total_progress * 0.45
                 )
                 candidates.append((score, launch_index, end_index))
@@ -855,8 +864,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             continue
                         if on_target and goal_center_distance(end_point) > GOAL_HALF_WIDTH_PERCENT + 8.0:
                             continue
+                        launch_semantic_distance = 0.0
+                        if semantic_launch is not None:
+                            launch_semantic_distance = (
+                                (float(launch_point["x"]) - float(semantic_launch["x"])) ** 2
+                                + (float(launch_point["y"]) - float(semantic_launch["y"])) ** 2
+                            ) ** 0.5
                         sparse.append((
-                            end_distance * 4.0 + time_score(launch_second) * 0.2 - progress * 0.4,
+                            end_distance * 4.0
+                            + time_score(launch_second) * 0.2
+                            + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
+                            - progress * 0.4,
                             launch_index,
                             end_index,
                         ))
