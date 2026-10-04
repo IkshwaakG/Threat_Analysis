@@ -679,7 +679,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ("hits the bar", "bar"),
             ("hits the post", "post"),
             ("blocked", "blocked"),
+            ("makes a save", "saved"),
+            ("make a save", "saved"),
             ("saved", "saved"),
+            ("save", "saved"),
+            ("denied by", "saved"),
         )
         for phrase, outcome in miss_phrases:
             if phrase in lower:
