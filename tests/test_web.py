@@ -530,8 +530,8 @@ class GoodGameWebTests(unittest.TestCase):
             "events": [
                 {
                     "id": 9150,
-                    "minute": 46,
-                    "extra_minute": None,
+                    "minute": 45,
+                    "extra_minute": 1,
                     "period_id": 100,
                     "type": "goal",
                     "text": "Goal",
@@ -553,7 +553,8 @@ class GoodGameWebTests(unittest.TestCase):
             "commentary": [
                 {
                     "id": 7050,
-                    "minute": 46,
+                    "minute": 45,
+                    "extra_minute": 1,
                     "comment": "Goal! Header Scorer scores with a header from the center of the box.",
                     "is_goal": True,
                     "is_important": True,
@@ -731,7 +732,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
         self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 65.0, "y": 52.0})
+        self.assertNotIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
@@ -816,7 +817,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["assist_type"], "cross")
         self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertEqual(event["spatial"]["assist_actor_anchor"], {"x": 60.0, "y": 78.0})
+        self.assertNotIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
         self.assertEqual(len(event["spatial"]["ball_track"]), 3)
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
