@@ -897,6 +897,194 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
 
+    def test_saved_attempt_duplicate_rows_collapse_to_one_semantic_event(self):
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 19, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 1846739,
+                    "name": "Matheus Cunha",
+                    "team_id": 14,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 10,
+                    "position_id": 27,
+                    "formation_field": "5:1",
+                    "formation_position": 11,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 537121,
+                    "name": "Mason Mount",
+                    "team_id": 14,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 7,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 10,
+                    "match_stats": [],
+                },
+            ],
+            "events": [],
+            "timeline": [
+                {
+                    "id": 150945365,
+                    "minute": 38,
+                    "period_id": 6175643,
+                    "type": "Shot On Target",
+                    "text": "7th Shot On Target",
+                    "team_id": 14,
+                    "player_id": 1846739,
+                    "related_player_id": 537121,
+                    "player": "Matheus Cunha",
+                    "related_player_name": "Mason Mount",
+                    "is_home": True,
+                    "sort_order": 12,
+                },
+                {
+                    "id": 150945386,
+                    "minute": 38,
+                    "period_id": 6175643,
+                    "type": "Shot Off Target",
+                    "text": "5th Shot Off Target",
+                    "team_id": 14,
+                    "player_id": 1846739,
+                    "related_player_id": 537121,
+                    "player": "Matheus Cunha",
+                    "related_player_name": "Mason Mount",
+                    "is_home": True,
+                    "sort_order": 13,
+                },
+            ],
+            "commentary": [
+                {
+                    "id": 11094777,
+                    "minute": 38,
+                    "comment": (
+                        "Attempt saved. Matheus Cunha from Manchester United has a left-footed "
+                        "shot from a tough angle on the left, but David Raya from Arsenal saves "
+                        "it in the center of the goal. The assist came from Mason Mount."
+                    ),
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 37,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 6175643, "timer": "37:38", "x": 75.0, "y": 78.0},
+                {"id": 2, "period_id": 6175643, "timer": "37:49", "x": 85.0, "y": 47.0},
+                {"id": 3, "period_id": 6175643, "timer": "37:54", "x": 98.0, "y": 50.0},
+            ],
+            "video_events": [],
+        }
+
+        events = [
+            event for event in _selectable_events(game)
+            if event.get("minute") == 38
+            and (event.get("spatial") or {}).get("kind") == "shot_on_target"
+        ]
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["id"], 150945365)
+        self.assertEqual(event["commentary_id"], 11094777)
+        self.assertEqual(event["player"], "Matheus Cunha")
+        self.assertEqual(event["related_player_name"], "Mason Mount")
+        self.assertEqual(event["display_type"], "Shot On Target")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
+        self.assertEqual(event["spatial"]["shot_start_index"], 1)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+
+    def test_corner_setup_is_hidden_when_commentary_identifies_following_shot(self):
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 19, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 3259,
+                    "name": "Ben White",
+                    "team_id": 19,
+                    "team_name": "Arsenal",
+                    "team_location": "away",
+                    "jersey_number": 4,
+                    "position_id": 25,
+                    "formation_field": "2:4",
+                    "formation_position": 2,
+                    "match_stats": [],
+                }
+            ],
+            "events": [],
+            "timeline": [
+                {
+                    "id": 150945407,
+                    "minute": 41,
+                    "period_id": 6175643,
+                    "type": "Corner",
+                    "text": "4th Corner",
+                    "team_id": 19,
+                    "is_home": False,
+                    "sort_order": 4,
+                },
+                {
+                    "id": 150945408,
+                    "minute": 41,
+                    "period_id": 6175643,
+                    "type": "Shot Off Target",
+                    "text": "6th Shot Off Target",
+                    "team_id": 19,
+                    "player_id": 3259,
+                    "player": "Ben White",
+                    "is_home": False,
+                    "sort_order": 5,
+                },
+            ],
+            "commentary": [
+                {
+                    "id": 11094781,
+                    "minute": 40,
+                    "comment": "Arsenal win a corner after Patrick Dorgu concedes.",
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 41,
+                },
+                {
+                    "id": 11094784,
+                    "minute": 41,
+                    "comment": (
+                        "Ben White from Arsenal misses a right-footed shot from outside the box "
+                        "to the left after a corner."
+                    ),
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 44,
+                },
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        events = _selectable_events(game)
+        minute_events = [event for event in events if event.get("minute") == 41]
+
+        self.assertEqual(len(minute_events), 1)
+        shot = minute_events[0]
+        self.assertEqual(shot["player"], "Ben White")
+        self.assertEqual(shot["spatial"]["kind"], "shot_off_target")
+        self.assertEqual(shot["display_type"], "Shot Off Target")
+        self.assertEqual(shot["detail"]["situation"], "Corner")
+        self.assertEqual(shot["detail"]["shot_origin"], "outside the box")
+        self.assertEqual(shot["detail"]["shot_outcome_hint"], "left")
+        self.assertEqual(shot["spatial"]["source"], "semantic_reconstructed")
+        self.assertEqual(shot["spatial"]["shot_start_index"], 0)
+        self.assertEqual(shot["spatial"]["ball_track"][0]["x"], shot["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(len(shot["spatial"]["ball_track"]), 2)
+
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
             response = self.client.get(
