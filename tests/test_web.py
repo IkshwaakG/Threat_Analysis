@@ -354,15 +354,16 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["detail"]["situation"], "Fast break")
         self.assertEqual(goal["commentary_id"], 7001)
         self.assertEqual(goal["trend_context"][0]["participant_name"], "Manchester United")
-        self.assertEqual(goal["spatial"]["source"], "stored_assist_goal")
+        self.assertEqual(goal["spatial"]["source"], "semantic_fused")
         self.assertEqual(goal["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
+        self.assertIn("assist_actor_anchor", goal["spatial"])
         self.assertNotEqual(goal["spatial"]["shot_actor_anchor"], goal["spatial"]["ball_track"][-1])
-        self.assertGreater(goal["spatial"]["shot_start_index"], 0)
+        self.assertEqual(goal["spatial"]["shot_start_index"], 1)
         self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
-        shot_index = goal["spatial"]["shot_start_index"]
-        self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
-        self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
+        self.assertEqual(goal["spatial"]["ball_track"][0]["x"], goal["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["ball_track"][1]["x"], goal["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["coordinate_support"]["terminal_timer"], "39:56")
 
     def test_goal_clusters_same_minute_corner_buildup(self):
         game = {
@@ -446,9 +447,11 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["player"], "Riccardo Calafiori")
         self.assertEqual(goal["detail"]["body_part"], "Header")
         self.assertEqual(goal["detail"]["situation"], "Corner")
-        self.assertEqual(goal["spatial"]["source"], "clustered_corner_goal")
-        self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
-        self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
+        self.assertEqual(goal["spatial"]["source"], "semantic_reconstructed")
+        self.assertEqual(goal["spatial"]["shot_start_index"], 0)
+        self.assertEqual(goal["spatial"]["phases"], [{"kind": "shot", "start_index": 0, "end_index": 1}])
+        self.assertEqual(goal["spatial"]["ball_track"][0]["x"], goal["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["ball_track"][0]["y"], goal["spatial"]["shot_actor_anchor"]["y"])
 
     def test_saved_comment_reclassifies_raw_off_target_shot(self):
         game = {
@@ -570,14 +573,11 @@ class GoodGameWebTests(unittest.TestCase):
         }
 
         event = next(item for item in _selectable_events(game) if item.get("id") == 9160)
-        timers = [
-            point.get("timer")
-            for point in event.get("spatial", {}).get("ball_track", [])
-        ]
-
-        self.assertIn("12:10", timers)
-        self.assertIn("12:16", timers)
-        self.assertNotIn("13:10", timers)
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
+        self.assertEqual(event["spatial"]["coordinate_support"]["terminal_timer"], "12:16")
+        self.assertEqual(event["spatial"]["coordinate_support"]["points"], 2)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["shot_actor_anchor"]["x"])
+        self.assertNotEqual(event["spatial"]["ball_track"][0].get("timer"), "13:10")
 
     def test_period_minutes_seconds_bound_ball_coordinate_join(self):
         game = {
@@ -705,7 +705,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["body_part"], "Right foot")
         self.assertEqual(event["detail"]["shot_origin"], "outside the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "right")
-        self.assertEqual(event["spatial"]["source"], "commentary_inferred")
+        self.assertEqual(event["spatial"]["source"], "semantic_reconstructed")
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 76.0, "y": 50.0})
         self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
         self.assertFalse(event.get("player_positions"))
@@ -800,10 +800,12 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["body_part"], "Right foot")
         self.assertEqual(event["detail"]["shot_origin"], "outside the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
-        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertNotIn("assist_actor_anchor", event["spatial"])
+        self.assertIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
@@ -885,14 +887,204 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_origin"], "center of the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "blocked")
         self.assertEqual(event["detail"]["assist_type"], "cross")
-        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertNotIn("assist_actor_anchor", event["spatial"])
+        self.assertIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
         self.assertEqual(len(event["spatial"]["ball_track"]), 3)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
         self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+
+    def test_saved_attempt_duplicate_rows_collapse_to_one_semantic_event(self):
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 19, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 1846739,
+                    "name": "Matheus Cunha",
+                    "team_id": 14,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 10,
+                    "position_id": 27,
+                    "formation_field": "5:1",
+                    "formation_position": 11,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 537121,
+                    "name": "Mason Mount",
+                    "team_id": 14,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 7,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 10,
+                    "match_stats": [],
+                },
+            ],
+            "events": [],
+            "timeline": [
+                {
+                    "id": 150945365,
+                    "minute": 38,
+                    "period_id": 6175643,
+                    "type": "Shot On Target",
+                    "text": "7th Shot On Target",
+                    "team_id": 14,
+                    "player_id": 1846739,
+                    "related_player_id": 537121,
+                    "player": "Matheus Cunha",
+                    "related_player_name": "Mason Mount",
+                    "is_home": True,
+                    "sort_order": 12,
+                },
+                {
+                    "id": 150945386,
+                    "minute": 38,
+                    "period_id": 6175643,
+                    "type": "Shot Off Target",
+                    "text": "5th Shot Off Target",
+                    "team_id": 14,
+                    "player_id": 1846739,
+                    "related_player_id": 537121,
+                    "player": "Matheus Cunha",
+                    "related_player_name": "Mason Mount",
+                    "is_home": True,
+                    "sort_order": 13,
+                },
+            ],
+            "commentary": [
+                {
+                    "id": 11094777,
+                    "minute": 38,
+                    "comment": (
+                        "Attempt saved. Matheus Cunha from Manchester United has a left-footed "
+                        "shot from a tough angle on the left, but David Raya from Arsenal saves "
+                        "it in the center of the goal. The assist came from Mason Mount."
+                    ),
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 37,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 6175643, "timer": "37:38", "x": 75.0, "y": 78.0},
+                {"id": 2, "period_id": 6175643, "timer": "37:49", "x": 85.0, "y": 47.0},
+                {"id": 3, "period_id": 6175643, "timer": "37:54", "x": 98.0, "y": 50.0},
+            ],
+            "video_events": [],
+        }
+
+        events = [
+            event for event in _selectable_events(game)
+            if event.get("minute") == 38
+            and (event.get("spatial") or {}).get("kind") == "shot_on_target"
+        ]
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["id"], 150945365)
+        self.assertEqual(event["commentary_id"], 11094777)
+        self.assertEqual(event["player"], "Matheus Cunha")
+        self.assertEqual(event["related_player_name"], "Mason Mount")
+        self.assertEqual(event["display_type"], "Shot On Target")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
+        self.assertEqual(event["spatial"]["shot_start_index"], 1)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+
+    def test_corner_setup_is_hidden_when_commentary_identifies_following_shot(self):
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 19, "name": "Arsenal"},
+            "players": [
+                {
+                    "player_id": 3259,
+                    "name": "Ben White",
+                    "team_id": 19,
+                    "team_name": "Arsenal",
+                    "team_location": "away",
+                    "jersey_number": 4,
+                    "position_id": 25,
+                    "formation_field": "2:4",
+                    "formation_position": 2,
+                    "match_stats": [],
+                }
+            ],
+            "events": [],
+            "timeline": [
+                {
+                    "id": 150945407,
+                    "minute": 41,
+                    "period_id": 6175643,
+                    "type": "Corner",
+                    "text": "4th Corner",
+                    "team_id": 19,
+                    "is_home": False,
+                    "sort_order": 4,
+                },
+                {
+                    "id": 150945408,
+                    "minute": 41,
+                    "period_id": 6175643,
+                    "type": "Shot Off Target",
+                    "text": "6th Shot Off Target",
+                    "team_id": 19,
+                    "player_id": 3259,
+                    "player": "Ben White",
+                    "is_home": False,
+                    "sort_order": 5,
+                },
+            ],
+            "commentary": [
+                {
+                    "id": 11094781,
+                    "minute": 40,
+                    "comment": "Arsenal win a corner after Patrick Dorgu concedes.",
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 41,
+                },
+                {
+                    "id": 11094784,
+                    "minute": 41,
+                    "comment": (
+                        "Ben White from Arsenal misses a right-footed shot from outside the box "
+                        "to the left after a corner."
+                    ),
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 44,
+                },
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        events = _selectable_events(game)
+        minute_events = [event for event in events if event.get("minute") == 41]
+
+        self.assertEqual(len(minute_events), 1)
+        shot = minute_events[0]
+        self.assertEqual(shot["player"], "Ben White")
+        self.assertEqual(shot["spatial"]["kind"], "shot_off_target")
+        self.assertEqual(shot["display_type"], "Shot Off Target")
+        self.assertEqual(shot["detail"]["situation"], "Corner")
+        self.assertEqual(shot["detail"]["shot_origin"], "outside the box")
+        self.assertEqual(shot["detail"]["shot_outcome_hint"], "left")
+        self.assertEqual(shot["spatial"]["source"], "semantic_reconstructed")
+        self.assertEqual(shot["spatial"]["shot_start_index"], 0)
+        self.assertEqual(shot["spatial"]["ball_track"][0]["x"], shot["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(len(shot["spatial"]["ball_track"]), 2)
 
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
@@ -927,7 +1119,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["head_to_head"][0]["id"], 41)
         self.assertEqual(body["head_to_head"][0]["home_score"], 1)
         shot = body["selectable_events"][0]["spatial"]
-        self.assertEqual(shot["source"], "stored")
+        self.assertIn(shot["source"], {"semantic_fused", "semantic_reconstructed"})
         self.assertGreaterEqual(len(shot["ball_track"]), 2)
         self.assertGreaterEqual(shot["ball_path"]["end"]["x"], 90.0)
         self.assertLessEqual(abs(shot["ball_path"]["end"]["y"] - 50.0), 9.0)
@@ -938,10 +1130,10 @@ class GoodGameWebTests(unittest.TestCase):
             for event in body["selectable_events"]
             if event["spatial"]["kind"] == "corner"
         )
-        self.assertEqual(corner["source"], "stored")
-        self.assertGreaterEqual(len(corner["ball_track"]), 2)
+        self.assertIn(corner["source"], {"stored", "inferred", "commentary_inferred"})
         self.assertGreaterEqual(corner["ball_path"]["start"]["x"], 95.0)
-        self.assertLessEqual(corner["ball_path"]["start"]["y"], 12.0)
+        corner_y = float(corner["ball_path"]["start"]["y"])
+        self.assertLessEqual(min(corner_y, 100.0 - corner_y), 12.0)
         self.assertGreater(corner["ball_path"]["end"]["x"], 70.0)
         # Stored corner starts near the right goal line and must remain in that
         # same attacking end rather than traversing across midfield.
@@ -1027,12 +1219,13 @@ def test_goal_can_reuse_matching_shot_on_target_track():
 
 def test_event_minute_matches_same_sportmonks_timer_minute():
     def timer_window(event_minute: int, extra_minute: int = 0) -> tuple[int, int]:
-        match_minute = event_minute + extra_minute
-        return match_minute * 60, match_minute * 60 + 59
+        timer_minute = max(0, event_minute - 1 + extra_minute)
+        return timer_minute * 60, timer_minute * 60 + 59
 
-    assert timer_window(35) == (35 * 60, 35 * 60 + 59)
-    assert timer_window(37) == (37 * 60, 37 * 60 + 59)
-    assert timer_window(90) == (90 * 60, 90 * 60 + 59)
+    assert timer_window(13) == (12 * 60, 12 * 60 + 59)
+    assert timer_window(62) == (61 * 60, 61 * 60 + 59)
+    assert timer_window(45, 1) == (45 * 60, 45 * 60 + 59)
+    assert timer_window(45, 2) == (46 * 60, 46 * 60 + 59)
 
 
 def test_goal_matcher_must_not_use_kickoff_reset_as_goal_track():

@@ -499,7 +499,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if role == "shooter":
             anchors = [
                 lower.find(token)
-                for token in (" shot", " strike", " attempt", " header", " shoots", " fires")
+                for token in (
+                    " shot",
+                    " strike",
+                    " attempt",
+                    " header",
+                    " heads the ball",
+                    " headed the ball",
+                    " shoots",
+                    " fires",
+                )
                 if lower.find(token) >= 0
             ]
         else:
@@ -544,6 +553,58 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
+    def commentary_action_kind(comment: dict[str, Any]) -> str:
+        text = str(comment.get("comment") or "").casefold()
+        if comment.get("is_goal") is True or text.startswith("goal!") or " scores " in f" {text} ":
+            return "goal"
+
+        if (
+            "attempt saved" in text
+            or " is saved " in f" {text} "
+            or " saved by " in f" {text} "
+            or "makes a save" in text
+            or "denied by" in text
+        ):
+            return "shot_on_target"
+
+        if (
+            "attempt missed" in text
+            or " misses " in f" {text} "
+            or " missed " in f" {text} "
+            or "wide to the" in text
+            or "goes wide" in text
+            or "too high" in text
+            or "over the bar" in text
+        ):
+            return "shot_off_target"
+
+        if (
+            " shot " in f" {text} "
+            or "header" in text
+            or "heads the ball" in text
+            or "headed the ball" in text
+            or "attempt blocked" in text
+        ):
+            return "shot"
+
+        corner_action = (
+            "wins a corner" in text
+            or "win a corner" in text
+            or "corner awarded" in text
+            or "concedes a corner" in text
+            or ("corner" in text and "after" in text and "concedes" in text)
+        )
+        if corner_action:
+            return "corner"
+
+        if "offside" in text:
+            return "offside"
+        if "yellow card" in text or "red card" in text or "booked" in text:
+            return "card"
+        if "foul" in text or "free kick" in text:
+            return "foul"
+        return "event"
+
     def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
         try:
             minute = int(item.get("minute"))
@@ -557,18 +618,31 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 comment_minute = int(comment.get("minute"))
             except (TypeError, ValueError):
                 continue
-            if comment_minute != minute:
-                continue
-            if kind == "goal" and comment.get("is_goal") is not True:
-                continue
-            if kind != "goal" and comment.get("is_goal") is True:
-                # A scored action may also have a corner/shot row in the same
-                # minute. Keep the goal commentary for the Goal event and
-                # cluster the related rows later; do not relabel the corner.
-                continue
+            action_kind = commentary_action_kind(comment)
+            minute_delta = abs(comment_minute - minute)
+            if kind == "corner":
+                # Corner timeline rows are occasionally one display minute after
+                # the commentary. Allow that small offset, but only for a true
+                # corner-award comment. Never attach "shot ... after a corner".
+                if minute_delta > 1 or action_kind != "corner":
+                    continue
+            else:
+                if comment_minute != minute:
+                    continue
+                if kind == "goal" and action_kind != "goal":
+                    continue
+                if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind not in {
+                    "shot",
+                    "shot_on_target",
+                    "shot_off_target",
+                }:
+                    continue
+                if kind not in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind == "goal":
+                    continue
+
             text = str(comment.get("comment") or "")
             lower_text = text.casefold()
-            score = 0
+            score = minute_delta * 2
             if scorer and scorer in lower_text:
                 score -= 5
             if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in lower_text:
@@ -589,8 +663,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if any(token in lower_text for token in tokens):
                 score -= 3
 
-            if kind == "goal" and comment.get("is_goal") is not True:
-                score += 4
+            if action_kind == kind:
+                score -= 5
+            elif kind in {"shot", "shot_on_target", "shot_off_target"} and action_kind.startswith("shot"):
+                score -= 2
+
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
@@ -607,7 +684,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["body_part"] = "Left foot"
         elif "right-footed" in lower or "right footed" in lower or "right foot shot" in lower:
             context["body_part"] = "Right foot"
-        elif "header" in lower or "headed" in lower:
+        elif (
+            "header" in lower
+            or "headed" in lower
+            or "heads the ball" in lower
+            or "head the ball" in lower
+        ):
             context["body_part"] = "Header"
 
         origin_phrases = (
@@ -714,6 +796,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if phrase in lower:
                 context["shot_outcome_hint"] = outcome
                 break
+
+        if "shot_outcome_hint" not in context and (
+            "miss" in lower or "attempt missed" in lower
+        ):
+            if "to the left" in lower or "goes left" in lower or "wide left" in lower:
+                context["shot_outcome_hint"] = "left"
+            elif "to the right" in lower or "goes right" in lower or "wide right" in lower:
+                context["shot_outcome_hint"] = "right"
+            elif "over" in lower or "high" in lower:
+                context["shot_outcome_hint"] = "high"
 
         for phrase in ("through ball", "cross", "cutback", "long ball"):
             if phrase in lower:
@@ -939,6 +1031,246 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             y = 50.0
         return {"x": target_x, "y": y}
 
+    def fixture_role_anchor(
+        item: dict[str, Any],
+        player_id: Any,
+        role: str,
+        reference: dict[str, float] | None = None,
+    ) -> dict[str, float] | None:
+        if player_id is None:
+            return None
+        try:
+            player = players_by_id.get(int(player_id))
+        except (TypeError, ValueError):
+            player = None
+        if player is None:
+            return None
+
+        team_side = side(item)
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        direction = 1.0 if target_x > 50.0 else -1.0
+        try:
+            base_y = float(player.get("y"))
+        except (TypeError, ValueError):
+            base_y = 50.0
+
+        role_name = str(player.get("role") or "").casefold()
+        if role == "shooter":
+            distance = 20.0 if "attack" in role_name else 25.0 if "mid" in role_name else 30.0
+            x = target_x - direction * distance
+            y = base_y
+        else:
+            if reference is not None:
+                x = float(reference["x"]) - direction * 18.0
+                y = base_y * 0.65 + float(reference["y"]) * 0.35
+            else:
+                x = target_x - direction * 34.0
+                y = base_y
+
+        return {
+            "x": round(max(2.0, min(98.0, x)), 3),
+            "y": round(max(2.0, min(98.0, y)), 3),
+        }
+
+    def fuse_with_coordinate_evidence(
+        expected: dict[str, float] | None,
+        coordinate_track: list[dict[str, Any]],
+        *,
+        max_distance: float,
+        weight: float = 0.25,
+    ) -> dict[str, float] | None:
+        if expected is None or not coordinate_track:
+            return expected
+
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for point in coordinate_track:
+            if not isinstance(point, dict):
+                continue
+            try:
+                px = float(point["x"])
+                py = float(point["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            distance = (
+                (px - float(expected["x"])) ** 2
+                + (py - float(expected["y"])) ** 2
+            ) ** 0.5
+            if distance <= max_distance:
+                candidates.append((distance, point))
+
+        if not candidates:
+            return expected
+
+        _, nearest = min(candidates, key=lambda row: row[0])
+        px = float(nearest["x"])
+        py = float(nearest["y"])
+        return {
+            "x": round(float(expected["x"]) * (1.0 - weight) + px * weight, 3),
+            "y": round(float(expected["y"]) * (1.0 - weight) + py * weight, 3),
+        }
+
+    def semantic_attempt_spatial(
+        item: dict[str, Any],
+        kind: str,
+        context: dict[str, Any],
+        coordinate_track: list[dict[str, Any]],
+        base_spatial: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build player-led attempt geometry from all available evidence.
+
+        Event + commentary define the action and actors. Fixture/lineup facts
+        provide fallback player locations. ballCoordinates may refine a
+        supported semantic location, but never create the story by themselves.
+        """
+        team_side = side(item)
+
+        semantic_shooter = semantic_shot_start(item, team_side, context)
+        explicit_shooter = player_position_anchor(item, item.get("player_id"))
+        fallback_shooter = fixture_role_anchor(item, item.get("player_id"), "shooter")
+        shooter = semantic_shooter or explicit_shooter or fallback_shooter
+        if shooter is not None:
+            shooter = fuse_with_coordinate_evidence(
+                shooter,
+                coordinate_track,
+                max_distance=11.0 if semantic_shooter is not None else 7.0,
+                weight=0.20 if semantic_shooter is not None else 0.12,
+            )
+
+        if kind == "goal":
+            outcome = semantic_goal_end(item, team_side, context)
+        else:
+            outcome = semantic_shot_end(item, team_side, context, kind)
+
+        explicit_outcome = bool(
+            context.get("goal_target")
+            or context.get("shot_outcome_hint")
+        )
+        if not explicit_outcome and coordinate_track:
+            outcome = fuse_with_coordinate_evidence(
+                outcome,
+                [coordinate_track[-1]],
+                max_distance=10.0,
+                weight=0.30,
+            ) or outcome
+
+        has_assist = bool(
+            item.get("related_player_id")
+            or item.get("related_player_name")
+            or item.get("assist")
+        )
+        assist = None
+        if has_assist:
+            explicit_assist = player_position_anchor(
+                item,
+                item.get("related_player_id"),
+            )
+            semantic_assist = semantic_assist_anchor(item, team_side, context)
+            fallback_assist = fixture_role_anchor(
+                item,
+                item.get("related_player_id"),
+                "assist",
+                shooter,
+            )
+            assist = semantic_assist or explicit_assist or fallback_assist
+            if assist is not None:
+                assist = fuse_with_coordinate_evidence(
+                    assist,
+                    coordinate_track[:-1],
+                    max_distance=14.0 if semantic_assist is not None else 9.0,
+                    weight=0.18 if semantic_assist is not None else 0.10,
+                )
+
+        if shooter is None:
+            # A known event actor should normally resolve through fixture data,
+            # but if it cannot, keep the existing inferred geometry rather than
+            # pretending a random ball coordinate is the player's body.
+            return base_spatial
+
+        if assist is not None:
+            separation = (
+                (float(assist["x"]) - float(shooter["x"])) ** 2
+                + (float(assist["y"]) - float(shooter["y"])) ** 2
+            ) ** 0.5
+            if separation < 6.0:
+                target_x = attacking_x(item, team_side, 100.0, 0.0)
+                direction = 1.0 if target_x > 50.0 else -1.0
+                assist = {
+                    "x": round(max(2.0, min(98.0, float(shooter["x"]) - direction * 14.0)), 3),
+                    "y": round(max(2.0, min(98.0, float(assist["y"]))), 3),
+                }
+
+        points: list[dict[str, Any]] = []
+        if assist is not None:
+            points.append({
+                "x": float(assist["x"]),
+                "y": float(assist["y"]),
+                "timer": None,
+                "period_id": item.get("period_id"),
+            })
+        points.append({
+            "x": float(shooter["x"]),
+            "y": float(shooter["y"]),
+            "timer": None,
+            "period_id": item.get("period_id"),
+        })
+        points.append({
+            "x": float(outcome["x"]),
+            "y": float(outcome["y"]),
+            "timer": coordinate_track[-1].get("timer") if coordinate_track else None,
+            "period_id": item.get("period_id"),
+        })
+
+        shot_start_index = 1 if assist is not None else 0
+        spatial_data = dict(base_spatial)
+        spatial_data.update({
+            "kind": kind,
+            "source": "semantic_fused" if coordinate_track else "semantic_reconstructed",
+            "anchor": points[0],
+            "ball_track": points,
+            "ball_path": {
+                "start": points[0],
+                "end": points[-1],
+            },
+            "shot_actor_anchor": {
+                "x": float(shooter["x"]),
+                "y": float(shooter["y"]),
+            },
+            "shot_start_index": shot_start_index,
+            "phases": (
+                [
+                    {"kind": "assist", "start_index": 0, "end_index": 1},
+                    {"kind": "shot", "start_index": 1, "end_index": 2},
+                ]
+                if assist is not None
+                else [
+                    {"kind": "shot", "start_index": 0, "end_index": 1}
+                ]
+            ),
+            "coordinate_support": {
+                "points": len(coordinate_track),
+                "terminal_timer": (
+                    coordinate_track[-1].get("timer")
+                    if coordinate_track
+                    else None
+                ),
+            },
+        })
+        if assist is not None:
+            spatial_data["assist_actor_anchor"] = {
+                "x": float(assist["x"]),
+                "y": float(assist["y"]),
+            }
+        else:
+            spatial_data.pop("assist_actor_anchor", None)
+
+        marker = outcome_marker_for_shot(item, context, points[-1], kind)
+        if marker:
+            spatial_data["outcome_marker"] = marker
+        else:
+            spatial_data.pop("outcome_marker", None)
+
+        return spatial_data
+
     def event_coordinate_track(
         item: dict[str, Any],
         spatial_data: dict[str, Any],
@@ -977,9 +1309,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         #   45+2' -> 46:00-46:59
         # Therefore the canonical timer minute is minute - 1 + extra_minute.
         timer_minute = max(0, minute - 1 + extra)
-        candidate_windows = [
-            (max(0, timer_minute * 60 - 16), timer_minute * 60 + 69)
+        target_windows = [
+            (timer_minute * 60, timer_minute * 60 + 59)
         ]
+        # The displayed shot/goal minute represents the outcome time. The
+        # pass/shot launch may start shortly before that minute boundary, so
+        # allow a short backward support window but never treat it as the
+        # event's terminal minute.
+        support_start = max(0, target_windows[0][0] - 24)
+        support_end = target_windows[0][1]
         event_period_id = item.get("period_id")
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
@@ -1047,7 +1385,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if any(start <= seconds <= end for start, end in candidate_windows)
+            if support_start <= seconds <= support_end
         ]
         if not time_candidates:
             return []
@@ -1069,7 +1407,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         def time_score(seconds: int) -> float:
             best = float("inf")
-            for start, end in candidate_windows:
+            for start, end in target_windows:
                 if start <= seconds <= end:
                     return 0.0
                 best = min(best, abs(seconds - start), abs(seconds - end))
@@ -1134,6 +1472,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 end_point, end_second = compact_rows[end_index]
                 end_distance = distance_to_target_goal(end_point)
 
+                # For a shot/goal, the event minute is the outcome minute. A
+                # candidate whose terminal point is outside that minute can
+                # support buildup context but cannot be the event trajectory.
+                if not any(start <= end_second <= end for start, end in target_windows):
+                    continue
+
                 # Endpoint must plausibly reach the goal zone for the event.
                 if end_distance > max_goal_distance:
                     continue
@@ -1161,7 +1505,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 score = (
                     end_distance * 4.0
                     + center_distance * (1.7 if on_target else 0.0)
-                    + time_score(launch_second) * 0.2
+                    + time_score(end_second) * 0.2
                     + duration * 0.08
                     + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                     - total_progress * 0.45
@@ -1197,7 +1541,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             ) ** 0.5
                         sparse.append((
                             end_distance * 4.0
-                            + time_score(launch_second) * 0.2
+                            + time_score(end_second) * 0.2
                             + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                             - progress * 0.4,
                             launch_index,
@@ -1293,7 +1637,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         time_score(row[1]),
                         min(
                             abs(row[1] - (start + 30))
-                            for start, _ in candidate_windows
+                            for start, _ in target_windows
                         ),
                     ),
                 )
@@ -1716,6 +2060,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            coordinate_evidence_track = list(coordinate_track)
             shot_start_index = 0
 
             if coordinate_track and kind == "goal":
@@ -1850,6 +2195,22 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
+            if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                spatial_data = semantic_attempt_spatial(
+                    item,
+                    kind,
+                    detail,
+                    coordinate_evidence_track,
+                    spatial_data,
+                )
+                semantic_track = list(spatial_data.get("ball_track") or [])
+                if semantic_track:
+                    item["ball_track"] = semantic_track
+                    item["ball_path"] = spatial_data.get("ball_path")
+                else:
+                    item.pop("ball_track", None)
+                    item["ball_path"] = spatial_data.get("ball_path")
+
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
@@ -2102,131 +2463,137 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             matched["ball_path"] = matched_spatial["ball_path"]
             matched["spatial"] = matched_spatial
 
-    def same_occurrence(a: dict[str, Any], b: dict[str, Any]) -> bool:
-        return (
-            a.get("minute") == b.get("minute")
-            and a.get("extra_minute") == b.get("extra_minute")
-            and a.get("team_id") == b.get("team_id")
+    def semantic_event_kind(event: dict[str, Any]) -> str:
+        return str(
+            (event.get("spatial") or {}).get("kind")
+            or event.get("semantic_type")
+            or category(event)
         )
 
-    def spatial_points(event: dict[str, Any]) -> list[dict[str, Any]]:
-        spatial_data = event.get("spatial") or {}
-        track = [
-            dict(point)
-            for point in spatial_data.get("ball_track", []) or []
-            if isinstance(point, dict)
-        ]
-        if track:
-            return track
-        path = spatial_data.get("ball_path")
-        if not isinstance(path, dict):
-            return []
-        result: list[dict[str, Any]] = []
-        for point in (path.get("start"), path.get("end")):
-            if isinstance(point, dict) and point.get("x") is not None and point.get("y") is not None:
-                result.append({
-                    "x": float(point["x"]),
-                    "y": float(point["y"]),
-                    "timer": point.get("timer"),
-                    "period_id": point.get("period_id") or event.get("period_id"),
-                })
-        return result
+    # Collapse duplicate timeline/stat rows that describe the same attempt.
+    # The real fixture payload can expose a saved shot simultaneously as raw
+    # Shot On Target and Shot Off Target rows; both then attach to the same
+    # commentary. One real-world attempt must produce one selectable event.
+    attempt_kinds = {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}
+    semantic_priority = {
+        "goal": 6,
+        "penalty": 5,
+        "shot_on_target": 4,
+        "shot_off_target": 3,
+        "shot": 2,
+    }
 
-    # A goal may be represented by a Goal event plus a Corner/Shot row from
-    # the same minute. When the goal comment/facts say it followed a corner,
-    # fold that delivery into the Goal instead of showing "Corner" as the
-    # canonical event.
-    clustered_ids: set[str] = set()
-    provider_goals = [
-        event for event in merged
-        if (event.get("spatial") or {}).get("kind") == "goal"
-    ]
-    for goal in provider_goals:
-        detail = goal.get("detail") if isinstance(goal.get("detail"), dict) else {}
-        situation_text = " ".join([
-            str(detail.get("situation") or ""),
-            str(goal.get("commentary_text") or ""),
-        ]).casefold()
-        if "corner" not in situation_text:
+    grouped_attempts: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for event in merged:
+        current_kind = semantic_event_kind(event)
+        if current_kind not in attempt_kinds:
+            continue
+        commentary_id = event.get("commentary_id")
+        commentary_text = " ".join(str(event.get("commentary_text") or "").split()).casefold()
+        if commentary_id is None and not commentary_text:
+            continue
+        actor_key = event.get("player_id") or str(event.get("player") or "").strip().casefold()
+        evidence_key = (
+            event.get("team_id"),
+            actor_key,
+            str(commentary_id) if commentary_id is not None else commentary_text,
+        )
+        grouped_attempts.setdefault(evidence_key, []).append(event)
+
+    duplicate_object_ids: set[int] = set()
+    for group in grouped_attempts.values():
+        if len(group) < 2:
             continue
 
-        related_corners = [
-            event for event in merged
-            if event is not goal
-            and same_occurrence(goal, event)
-            and (event.get("spatial") or {}).get("kind") == "corner"
-        ]
-        if not related_corners:
-            continue
+        def canonical_score(event: dict[str, Any]) -> tuple[int, int, int, int, int]:
+            current_kind = semantic_event_kind(event)
+            raw_agreement = 0 if event.get("original_spatial_kind") else 1
+            source_score = (
+                3 if event.get("source_kind") == "event"
+                else 2 if event.get("source_kind") == "timeline"
+                else 1
+            )
+            actor_score = 1 if event.get("player_id") is not None or event.get("player") else 0
+            assist_score = 1 if event.get("related_player_id") is not None or event.get("related_player_name") else 0
+            return (
+                semantic_priority.get(current_kind, 0),
+                raw_agreement,
+                source_score,
+                actor_score,
+                assist_score,
+            )
 
-        corner = max(
-            related_corners,
-            key=lambda event: len(spatial_points(event)),
-        )
-        clustered_ids.add(str(corner.get("id")))
+        canonical = max(group, key=canonical_score)
+        canonical_detail = dict(canonical.get("detail") or {})
+        for duplicate in group:
+            if duplicate is canonical:
+                continue
+            duplicate_object_ids.add(id(duplicate))
+            for key in (
+                "player_id",
+                "player",
+                "related_player_id",
+                "related_player_name",
+                "assist",
+                "scorer",
+            ):
+                if not canonical.get(key) and duplicate.get(key):
+                    canonical[key] = duplicate.get(key)
+            for key, value in (duplicate.get("detail") or {}).items():
+                canonical_detail.setdefault(key, value)
+        canonical["detail"] = canonical_detail
 
-        goal_spatial = goal.get("spatial") or {}
-        corner_points = spatial_points(corner)
-        semantic_start = (
-            goal_spatial.get("shot_actor_anchor")
-            or semantic_shot_start(goal, side(goal), detail)
-        )
-        goal_end = semantic_goal_end(goal, side(goal), detail)
-
-        combined: list[dict[str, Any]] = list(corner_points)
-        if semantic_start is not None:
-            if not combined or (
-                (float(combined[-1]["x"]) - float(semantic_start["x"])) ** 2
-                + (float(combined[-1]["y"]) - float(semantic_start["y"])) ** 2
-            ) ** 0.5 > 1.5:
-                combined.append({
-                    "x": round(float(semantic_start["x"]), 3),
-                    "y": round(float(semantic_start["y"]), 3),
-                    "timer": None,
-                    "period_id": goal.get("period_id"),
-                })
-        shot_start_index = max(0, len(combined) - 1)
-
-        if not combined or (
-            (float(combined[-1]["x"]) - float(goal_end["x"])) ** 2
-            + (float(combined[-1]["y"]) - float(goal_end["y"])) ** 2
-        ) ** 0.5 > 1.0:
-            combined.append({
-                "x": round(float(goal_end["x"]), 3),
-                "y": round(float(goal_end["y"]), 3),
-                "timer": None,
-                "period_id": goal.get("period_id"),
-            })
-
-        if len(combined) >= 2:
-            goal_spatial["source"] = "clustered_corner_goal"
-            goal_spatial["ball_track"] = combined
-            goal_spatial["anchor"] = combined[0]
-            goal_spatial["ball_path"] = {
-                "start": combined[0],
-                "end": combined[-1],
-            }
-            goal_spatial["shot_start_index"] = shot_start_index
-            goal_spatial["phases"] = [
-                {
-                    "kind": "assist",
-                    "start_index": 0,
-                    "end_index": shot_start_index,
-                },
-                {
-                    "kind": "shot",
-                    "start_index": shot_start_index,
-                    "end_index": len(combined) - 1,
-                },
-            ]
-            goal["spatial"] = goal_spatial
-            goal["ball_track"] = combined
-            goal["ball_path"] = goal_spatial["ball_path"]
-
-    if clustered_ids:
+    if duplicate_object_ids:
         merged = [
             event for event in merged
-            if str(event.get("id")) not in clustered_ids
+            if id(event) not in duplicate_object_ids
+        ]
+
+    # Corners/free-kicks are setup context when a following attempt explicitly
+    # says it came from that restart. Keep the shot/goal as the selectable
+    # event and its detail.situation as the cause; do not render a second,
+    # misleading standalone Corner using unrelated ball-coordinate geometry.
+    context_event_ids: set[int] = set()
+    corner_context_attempts = [
+        event for event in merged
+        if semantic_event_kind(event) in attempt_kinds
+        and str((event.get("detail") or {}).get("situation") or "").casefold() == "corner"
+    ]
+
+    for corner in merged:
+        if semantic_event_kind(corner) != "corner":
+            continue
+        try:
+            corner_minute = int(corner.get("minute"))
+        except (TypeError, ValueError):
+            continue
+
+        linked = False
+        for attempt in corner_context_attempts:
+            if attempt.get("team_id") != corner.get("team_id"):
+                continue
+            if (
+                corner.get("period_id") is not None
+                and attempt.get("period_id") is not None
+                and corner.get("period_id") != attempt.get("period_id")
+            ):
+                continue
+            try:
+                attempt_minute = int(attempt.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            minute_delta = attempt_minute - corner_minute
+            if 0 <= minute_delta <= 1:
+                linked = True
+                break
+
+        if linked:
+            context_event_ids.add(id(corner))
+
+    if context_event_ids:
+        merged = [
+            event for event in merged
+            if id(event) not in context_event_ids
         ]
 
     # Provider may expose the scored attempt as both a goal event and a
