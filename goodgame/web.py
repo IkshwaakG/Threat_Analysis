@@ -971,17 +971,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             extra = 0
 
-        # Provider event labels and ball-coordinate timers can differ by
-        # one displayed minute in real fixtures. Evaluate both plausible timer
-        # windows and let event geometry decide which one belongs to the action.
-        display_minute = minute + extra
-        candidate_minutes = sorted({
-            max(0, display_minute - 1),
-            display_minute,
-        })
+        # Football event minutes are ordinal display minutes:
+        #   13'   -> 12:00-12:59
+        #   45+1' -> 45:00-45:59
+        #   45+2' -> 46:00-46:59
+        # Therefore the canonical timer minute is minute - 1 + extra_minute.
+        timer_minute = max(0, minute - 1 + extra)
         candidate_windows = [
-            (candidate * 60, candidate * 60 + 59)
-            for candidate in candidate_minutes
+            (timer_minute * 60, timer_minute * 60 + 59)
         ]
         event_period_id = item.get("period_id")
         team_side = side(item)
@@ -1044,11 +1041,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
             ]
 
-        # Search both plausible timer windows, with a small boundary pad.
+        # Search only the canonical football-minute window. This prevents
+        # a 13' event from accidentally consuming 13:xx coordinates; 13' is
+        # the thirteenth minute of play, i.e. 12:00-12:59.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if any(start - 12 <= seconds <= end + 12 for start, end in candidate_windows)
+            if any(start <= seconds <= end for start, end in candidate_windows)
         ]
         if not time_candidates:
             return []
