@@ -1702,6 +1702,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["commentary_text"] = comment_text
             item["detail"] = detail
 
+            semantic_kind = semantic_kind_from_comment(
+                kind,
+                matched_commentary,
+                detail,
+            )
+            if semantic_kind != kind:
+                item["original_spatial_kind"] = kind
+                kind = semantic_kind
+
             trend_context = trend_context_for_event(item)
             if trend_context:
                 item["trend_context"] = trend_context
@@ -1749,27 +1758,36 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 }
 
                 if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
-                    coordinate_actor_anchor = coordinate_track[
-                        min(max(shot_start_index, 0), len(coordinate_track) - 1)
-                    ]
+                    # Player markers are not tied to ball-path endpoints.
+                    # Position them only when comments/facts/player_positions
+                    # give us evidence for an actor location.
                     semantic_actor_anchor = semantic_shot_start(
                         item,
                         team_side,
                         detail,
                     )
-                    spatial_data["shot_actor_anchor"] = (
-                        semantic_actor_anchor or {
-                            "x": float(coordinate_actor_anchor["x"]),
-                            "y": float(coordinate_actor_anchor["y"]),
-                        }
+                    stored_actor_anchor = player_position_anchor(
+                        item,
+                        item.get("player_id"),
                     )
+                    actor_anchor = semantic_actor_anchor or stored_actor_anchor
+                    if actor_anchor is not None:
+                        spatial_data["shot_actor_anchor"] = actor_anchor
                     spatial_data["shot_start_index"] = shot_start_index
 
                     if has_assist_phase:
-                        spatial_data["assist_actor_anchor"] = {
-                            "x": float(coordinate_track[0]["x"]),
-                            "y": float(coordinate_track[0]["y"]),
-                        }
+                        stored_assist_anchor = player_position_anchor(
+                            item,
+                            item.get("related_player_id"),
+                        )
+                        inferred_assist_anchor = semantic_assist_anchor(
+                            item,
+                            team_side,
+                            detail,
+                        )
+                        assist_anchor = stored_assist_anchor or inferred_assist_anchor
+                        if assist_anchor is not None:
+                            spatial_data["assist_actor_anchor"] = assist_anchor
 
                     spatial_data["phases"] = (
                         [
@@ -1807,18 +1825,29 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["ball_path"] = spatial_data["ball_path"]
             if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
                 semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
-                path_start = (
-                    spatial_data.get("ball_path", {}).get("start")
-                    if isinstance(spatial_data.get("ball_path"), dict)
-                    else None
-                )
+                stored_actor_anchor = player_position_anchor(item, item.get("player_id"))
                 path_end = (
                     spatial_data.get("ball_path", {}).get("end")
                     if isinstance(spatial_data.get("ball_path"), dict)
                     else None
                 )
-                if semantic_actor_anchor or isinstance(path_start, dict):
-                    spatial_data["shot_actor_anchor"] = semantic_actor_anchor or path_start
+                actor_anchor = semantic_actor_anchor or stored_actor_anchor
+                if actor_anchor is not None:
+                    spatial_data["shot_actor_anchor"] = actor_anchor
+
+                stored_assist_anchor = player_position_anchor(
+                    item,
+                    item.get("related_player_id"),
+                )
+                inferred_assist_anchor = semantic_assist_anchor(
+                    item,
+                    team_side,
+                    detail,
+                )
+                assist_anchor = stored_assist_anchor or inferred_assist_anchor
+                if assist_anchor is not None:
+                    spatial_data["assist_actor_anchor"] = assist_anchor
+
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
