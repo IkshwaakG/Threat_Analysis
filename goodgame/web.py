@@ -978,7 +978,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         # Therefore the canonical timer minute is minute - 1 + extra_minute.
         timer_minute = max(0, minute - 1 + extra)
         candidate_windows = [
-            (timer_minute * 60, timer_minute * 60 + 59)
+            (max(0, timer_minute * 60 - 16), timer_minute * 60 + 69)
         ]
         event_period_id = item.get("period_id")
         team_side = side(item)
@@ -1041,9 +1041,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
             ]
 
-        # Search only the canonical football-minute window. This prevents
-        # a 13' event from accidentally consuming 13:xx coordinates; 13' is
-        # the thirteenth minute of play, i.e. 12:00-12:59.
+        # Search the canonical football-minute window, with a brief margin at
+        # either edge for trajectories that cross a minute boundary. The
+        # bounded margin prevents a 13' event from consuming 13:10 coordinates.
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period

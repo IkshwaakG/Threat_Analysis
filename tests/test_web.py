@@ -74,7 +74,7 @@ class FakeServingRepository:
             "events": [
                 {
                     "id": 9001,
-                    "minute": 10,
+                    "minute": 11,
                     "extra_minute": None,
                     "type": "Shot On Target",
                     "text": "Shot On Target",
@@ -117,7 +117,7 @@ class FakeServingRepository:
             "commentary": [
                 {
                     "id": 5001,
-                    "minute": 12,
+                    "minute": 11,
                     "extra_minute": None,
                     "comment": "Bruno Fernandes tests the goalkeeper from outside the box.",
                     "is_goal": False,
