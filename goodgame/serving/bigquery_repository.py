@@ -834,6 +834,9 @@ class BigQueryServingRepository:
                 related_player_name
               FROM {self._table("match_facts")}
               WHERE fixture_id = @fixture_id
+              QUALIFY source_fetched_at = MAX(source_fetched_at) OVER (
+                PARTITION BY fixture_id
+              )
               ORDER BY category, match_fact_id
             ),
             fixture_video AS (
