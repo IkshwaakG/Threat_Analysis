@@ -1483,23 +1483,36 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
             shot_start_index = 0
+
             if coordinate_track and kind == "goal":
                 coordinate_track, shot_start_index = extend_goal_track_with_assist(
                     item,
                     coordinate_track,
                 )
-            if coordinate_track:
-                spatial_data["source"] = (
-                    "stored_assist_goal"
-                    if kind == "goal" and shot_start_index > 0
-                    else "stored"
+            elif coordinate_track and kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+                coordinate_track, shot_start_index = split_assisted_shot_track(
+                    item,
+                    coordinate_track,
+                    kind,
+                    detail,
                 )
+
+            if coordinate_track:
+                has_assist_phase = shot_start_index > 0
+                if kind == "goal" and has_assist_phase:
+                    spatial_data["source"] = "stored_assist_goal"
+                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and has_assist_phase:
+                    spatial_data["source"] = "stored_assist_shot"
+                else:
+                    spatial_data["source"] = "stored"
+
                 spatial_data["ball_track"] = coordinate_track
                 spatial_data["anchor"] = coordinate_track[0]
                 spatial_data["ball_path"] = {
                     "start": coordinate_track[0],
                     "end": coordinate_track[-1],
                 }
+
                 if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
                     coordinate_actor_anchor = coordinate_track[
                         min(max(shot_start_index, 0), len(coordinate_track) - 1)
@@ -1509,23 +1522,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         team_side,
                         detail,
                     )
-                    # Player placement is not forced to the ball's terminal
-                    # coordinate. Commentary shot-origin evidence is preferred
-                    # when present because a selected provider segment can
-                    # legitimately end at/inside the goal.
                     spatial_data["shot_actor_anchor"] = (
                         semantic_actor_anchor or {
                             "x": float(coordinate_actor_anchor["x"]),
                             "y": float(coordinate_actor_anchor["y"]),
                         }
                     )
-                if kind == "goal":
                     spatial_data["shot_start_index"] = shot_start_index
-                    if shot_start_index > 0:
+
+                    if has_assist_phase:
                         spatial_data["assist_actor_anchor"] = {
                             "x": float(coordinate_track[0]["x"]),
                             "y": float(coordinate_track[0]["y"]),
                         }
+
                     spatial_data["phases"] = (
                         [
                             {
@@ -1539,7 +1549,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                                 "end_index": len(coordinate_track) - 1,
                             },
                         ]
-                        if shot_start_index > 0
+                        if has_assist_phase
                         else [
                             {
                                 "kind": "shot",
@@ -1548,6 +1558,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             }
                         ]
                     )
+
+                    outcome_marker = outcome_marker_for_shot(
+                        item,
+                        detail,
+                        coordinate_track[-1],
+                        kind,
+                    )
+                    if outcome_marker:
+                        spatial_data["outcome_marker"] = outcome_marker
+
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
             if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
@@ -1557,8 +1577,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     if isinstance(spatial_data.get("ball_path"), dict)
                     else None
                 )
+                path_end = (
+                    spatial_data.get("ball_path", {}).get("end")
+                    if isinstance(spatial_data.get("ball_path"), dict)
+                    else None
+                )
                 if semantic_actor_anchor or isinstance(path_start, dict):
                     spatial_data["shot_actor_anchor"] = semantic_actor_anchor or path_start
+                outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
+                if outcome_marker:
+                    spatial_data["outcome_marker"] = outcome_marker
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
