@@ -532,21 +532,29 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["body_part"] = "Header"
 
         origin_phrases = (
-            "left side of the six-yard box",
-            "right side of the six-yard box",
-            "center of the six-yard box",
-            "centre of the six-yard box",
-            "left side of the box",
-            "right side of the box",
-            "center of the box",
-            "centre of the box",
-            "outside the box",
-            "very close range",
-            "over 35 yards",
+            ("left side of the six-yard box", "left side of the six-yard box"),
+            ("right side of the six-yard box", "right side of the six-yard box"),
+            ("center of the six-yard box", "center of the six-yard box"),
+            ("centre of the six-yard box", "center of the six-yard box"),
+            ("left side of the box", "left side of the box"),
+            ("right side of the box", "right side of the box"),
+            ("center of the box", "center of the box"),
+            ("centre of the box", "center of the box"),
+            ("middle of the penalty area", "center of the box"),
+            ("middle of penalty area", "center of the box"),
+            ("inside the penalty area", "center of the box"),
+            ("inside penalty area", "center of the box"),
+            ("edge of the penalty area", "outside the box"),
+            ("edge of the box", "outside the box"),
+            ("outside the penalty area", "outside the box"),
+            ("outside penalty area", "outside the box"),
+            ("outside the box", "outside the box"),
+            ("very close range", "very close range"),
+            ("over 35 yards", "over 35 yards"),
         )
-        for phrase in origin_phrases:
+        for phrase, normalized_origin in origin_phrases:
             if phrase in lower:
-                context["shot_origin"] = phrase.replace("centre", "center")
+                context["shot_origin"] = normalized_origin
                 break
 
         goal_targets = (
@@ -693,7 +701,34 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         kind: str,
     ) -> dict[str, float]:
         target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
         hint = str(context.get("shot_outcome_hint") or "").casefold()
+        goal_side = str(context.get("goal_side") or "").casefold()
+
+        if goal_side == "left":
+            target_y = 46.0 if attacks_right else 54.0
+        elif goal_side == "right":
+            target_y = 54.0 if attacks_right else 46.0
+        else:
+            target_y = 50.0
+
+        if hint == "blocked":
+            launch = semantic_shot_start(item, team_side, context) or {
+                "x": attacking_x(item, team_side, 82.0, 18.0),
+                "y": 50.0,
+            }
+            # A block happens before the goal line. Put the terminal point
+            # between the shot origin and goal, inside the attacking penalty area.
+            x = float(launch["x"]) + (target_x - float(launch["x"])) * 0.42
+            y = float(launch["y"]) + (target_y - float(launch["y"])) * 0.42
+            return {"x": x, "y": y}
+
+        if hint == "saved":
+            # Save marker sits just in front of the goal line rather than inside
+            # the net. Commentary target (top/right/etc.) still controls Y.
+            x = 98.2 if attacks_right else 1.8
+            return {"x": x, "y": target_y}
+
         if hint == "left":
             y = 50.0 - (GOAL_HALF_WIDTH_PERCENT + 2.6)
         elif hint == "right":
@@ -712,7 +747,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             )
             y = 50.0 + offsets[seed % len(offsets)]
         else:
-            y = 50.0
+            y = target_y
         return {"x": target_x, "y": y}
 
     def semantic_goal_end(
@@ -1158,6 +1193,99 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             for point, _ in prefix
         ]
         return normalized_prefix + shot_track, len(normalized_prefix)
+
+    def split_assisted_shot_track(
+        item: dict[str, Any],
+        track: list[dict[str, Any]],
+        kind: str,
+        context: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Split a stored sequence into assist/pass and shot phases.
+
+        Some provider coordinate windows include the final pass/cross before the
+        attempt. Commentary tells us where the shooter received/took the shot.
+        Use that semantic origin to find the phase boundary rather than treating
+        the whole traversal as one shot.
+        """
+        if kind not in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            return track, 0
+        if len(track) < 2:
+            return track, 0
+        has_assist = bool(
+            item.get("related_player_id")
+            or item.get("related_player_name")
+            or context.get("assist_type")
+        )
+        if not has_assist:
+            return track, 0
+
+        semantic_launch = semantic_shot_start(item, side(item), context)
+        if semantic_launch is None:
+            return track, 0
+
+        def distance(point: dict[str, Any]) -> float:
+            return (
+                (float(point["x"]) - float(semantic_launch["x"])) ** 2
+                + (float(point["y"]) - float(semantic_launch["y"])) ** 2
+            ) ** 0.5
+
+        distances = [distance(point) for point in track]
+        best_index = min(range(len(track)), key=lambda index: distances[index])
+
+        # Only split when a later coordinate is materially closer to the
+        # commentary-described shooting position than the first coordinate.
+        if best_index <= 0 or distances[0] - distances[best_index] < 7.0:
+            return track, 0
+
+        normalized = list(track)
+
+        # If the selected shooting coordinate is currently the final point, the
+        # stored segment represents the assist/cross ending at the shooter.
+        # Append a commentary-guided shot terminal so the actual attempt is
+        # visible (especially blocked and saved shots).
+        if best_index == len(normalized) - 1:
+            end = semantic_shot_end(item, side(item), context, kind)
+            normalized.append({
+                "x": round(float(end["x"]), 3),
+                "y": round(float(end["y"]), 3),
+                "timer": None,
+                "period_id": item.get("period_id"),
+            })
+
+        return normalized, best_index
+
+    def outcome_marker_for_shot(
+        item: dict[str, Any],
+        context: dict[str, Any],
+        terminal: dict[str, Any] | None,
+        kind: str,
+    ) -> dict[str, Any] | None:
+        hint = str(context.get("shot_outcome_hint") or "").casefold()
+        if hint not in {"saved", "blocked"}:
+            return None
+
+        fallback = semantic_shot_end(item, side(item), context, kind)
+        point = terminal if isinstance(terminal, dict) else fallback
+        try:
+            x = float(point.get("x", fallback["x"]))
+            y = float(point.get("y", fallback["y"]))
+        except (TypeError, ValueError):
+            x = float(fallback["x"])
+            y = float(fallback["y"])
+
+        # For a block, do not trust a terminal point sitting on the goal line:
+        # the comment explicitly says the ball was stopped before reaching it.
+        target_x = attacking_x(item, side(item), 100.0, 0.0)
+        if hint == "blocked" and abs(x - target_x) < 4.0:
+            x = float(fallback["x"])
+            y = float(fallback["y"])
+
+        return {
+            "kind": "save" if hint == "saved" else "block",
+            "x": round(x, 3),
+            "y": round(y, 3),
+            "label": "Save" if hint == "saved" else "Blocked",
+        }
 
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
