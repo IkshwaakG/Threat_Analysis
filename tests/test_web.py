@@ -418,7 +418,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_origin"], "outside the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "right")
         self.assertEqual(event["spatial"]["source"], "commentary_inferred")
-        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 76.0, "y": 50.0})
         self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
         self.assertFalse(event.get("player_positions"))
 
