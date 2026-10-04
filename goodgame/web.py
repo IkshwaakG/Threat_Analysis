@@ -1372,8 +1372,32 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     "start": coordinate_track[0],
                     "end": coordinate_track[-1],
                 }
+                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                    coordinate_actor_anchor = coordinate_track[
+                        min(max(shot_start_index, 0), len(coordinate_track) - 1)
+                    ]
+                    semantic_actor_anchor = semantic_shot_start(
+                        item,
+                        team_side,
+                        detail,
+                    )
+                    # Player placement is not forced to the ball's terminal
+                    # coordinate. Commentary shot-origin evidence is preferred
+                    # when present because a selected provider segment can
+                    # legitimately end at/inside the goal.
+                    spatial_data["shot_actor_anchor"] = (
+                        semantic_actor_anchor or {
+                            "x": float(coordinate_actor_anchor["x"]),
+                            "y": float(coordinate_actor_anchor["y"]),
+                        }
+                    )
                 if kind == "goal":
                     spatial_data["shot_start_index"] = shot_start_index
+                    if shot_start_index > 0:
+                        spatial_data["assist_actor_anchor"] = {
+                            "x": float(coordinate_track[0]["x"]),
+                            "y": float(coordinate_track[0]["y"]),
+                        }
                     spatial_data["phases"] = (
                         [
                             {
@@ -1398,6 +1422,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
+            if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
+                path_start = (
+                    spatial_data.get("ball_path", {}).get("start")
+                    if isinstance(spatial_data.get("ball_path"), dict)
+                    else None
+                )
+                if semantic_actor_anchor or isinstance(path_start, dict):
+                    spatial_data["shot_actor_anchor"] = semantic_actor_anchor or path_start
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
