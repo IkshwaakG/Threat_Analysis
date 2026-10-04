@@ -1254,16 +1254,72 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             elif team_side == "away":
                 item["is_home"] = False
 
+            # Enrich the structured event with the closest play-by-play text.
+            # Event/subtype remains authoritative for scorer/assist identity;
+            # commentary adds body-part, shot-zone, assist-style and goal-target
+            # semantics that are not present in the basic event row.
+            matched_commentary = commentary_for_event(item, kind)
+            detail = dict(item.get("detail") or {})
+            if matched_commentary:
+                comment_text = str(matched_commentary.get("comment") or "")
+                comment_context = shot_context_from_comment(comment_text)
+                for key, value in comment_context.items():
+                    if key in {"body_part", "situation"}:
+                        detail.setdefault(key, value)
+                    else:
+                        detail[key] = value
+                item["commentary_id"] = matched_commentary.get("id")
+                item["commentary_text"] = comment_text
+            item["detail"] = detail
+
+            trend_context = trend_context_for_event(item)
+            if trend_context:
+                item["trend_context"] = trend_context
+
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            shot_start_index = 0
+            if coordinate_track and kind == "goal":
+                coordinate_track, shot_start_index = extend_goal_track_with_assist(
+                    item,
+                    coordinate_track,
+                )
             if coordinate_track:
-                spatial_data["source"] = "stored"
+                spatial_data["source"] = (
+                    "stored_assist_goal"
+                    if kind == "goal" and shot_start_index > 0
+                    else "stored"
+                )
                 spatial_data["ball_track"] = coordinate_track
                 spatial_data["anchor"] = coordinate_track[0]
                 spatial_data["ball_path"] = {
                     "start": coordinate_track[0],
                     "end": coordinate_track[-1],
                 }
+                if kind == "goal":
+                    spatial_data["shot_start_index"] = shot_start_index
+                    spatial_data["phases"] = (
+                        [
+                            {
+                                "kind": "assist",
+                                "start_index": 0,
+                                "end_index": shot_start_index,
+                            },
+                            {
+                                "kind": "shot",
+                                "start_index": shot_start_index,
+                                "end_index": len(coordinate_track) - 1,
+                            },
+                        ]
+                        if shot_start_index > 0
+                        else [
+                            {
+                                "kind": "shot",
+                                "start_index": 0,
+                                "end_index": len(coordinate_track) - 1,
+                            }
+                        ]
+                    )
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
             item["spatial"] = spatial_data
