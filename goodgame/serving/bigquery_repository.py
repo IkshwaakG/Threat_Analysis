@@ -819,6 +819,23 @@ class BigQueryServingRepository:
               WHERE fixture_id = @fixture_id
               LIMIT 1
             ),
+            normalized_match_facts AS (
+              SELECT
+                match_fact_id AS id,
+                fixture_id,
+                type_id,
+                participant,
+                basis,
+                category,
+                scope,
+                natural_language,
+                data,
+                related_player_id,
+                related_player_name
+              FROM {self._table("match_facts")}
+              WHERE fixture_id = @fixture_id
+              ORDER BY category, match_fact_id
+            ),
             fixture_video AS (
               SELECT
                 provider,
@@ -1266,6 +1283,31 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'match_fact' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                mf.id,
+                mf.fixture_id,
+                mf.type_id,
+                mf.participant,
+                mf.basis,
+                mf.category,
+                mf.scope,
+                mf.natural_language,
+                mf.data,
+                IF(
+                  mf.related_player_id IS NULL AND mf.related_player_name IS NULL,
+                  NULL,
+                  STRUCT(
+                    mf.related_player_id AS player_id,
+                    mf.related_player_name AS display_name
+                  )
+                ) AS related_player
+              )) AS payload
+            FROM normalized_match_facts mf
+
+            UNION ALL
+
+            SELECT
               'video_reference' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 v.provider,
@@ -1332,6 +1374,7 @@ class BigQueryServingRepository:
         video_events: list[dict[str, Any]] = []
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
+        normalized_match_facts: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -1405,6 +1448,8 @@ class BigQueryServingRepository:
                 raw_fact = data
             elif kind == "advanced":
                 advanced = data
+            elif kind == "match_fact":
+                normalized_match_facts.append(data)
             elif kind == "video_reference":
                 video_reference = data
             elif kind == "video_event":
@@ -1557,7 +1602,7 @@ class BigQueryServingRepository:
             "xg_fixture": advanced.get("xg_fixture"),
             "trends": advanced.get("trends"),
             "expected_lineups": advanced.get("expected_lineups"),
-            "match_facts": advanced.get("match_facts") or [],
+            "match_facts": normalized_match_facts or advanced.get("match_facts") or [],
             "ai_overviews": advanced.get("ai_overviews") or [],
             "video_reference": video_reference,
             "video_events": video_events,
