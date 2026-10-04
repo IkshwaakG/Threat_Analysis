@@ -909,6 +909,67 @@ class BigQueryServingRepository:
                AND t.season_id = fp.season_id
               WHERE fp.fixture_id = @fixture_id
             ),
+            current_team_ids AS (
+              SELECT
+                MAX(IF(location = 'home', team_id, NULL)) AS home_team_id,
+                MAX(IF(location = 'away', team_id, NULL)) AS away_team_id
+              FROM {self._table("fixture_participants")}
+              WHERE fixture_id = @fixture_id
+            ),
+            h2h_fixtures AS (
+              SELECT
+                f.fixture_id,
+                f.league_id,
+                f.season_id,
+                f.starting_at,
+                f.result_info,
+                f.name
+              FROM {self._table("fixtures")} f
+              CROSS JOIN current_team_ids current_teams
+              WHERE f.fixture_id != @fixture_id
+                AND f.starting_at < (SELECT starting_at FROM fixture)
+                AND current_teams.home_team_id IS NOT NULL
+                AND current_teams.away_team_id IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM {self._table("fixture_participants")} fp
+                  WHERE fp.fixture_id = f.fixture_id
+                    AND fp.team_id = current_teams.home_team_id
+                )
+                AND EXISTS (
+                  SELECT 1
+                  FROM {self._table("fixture_participants")} fp
+                  WHERE fp.fixture_id = f.fixture_id
+                    AND fp.team_id = current_teams.away_team_id
+                )
+              ORDER BY f.starting_at DESC
+              LIMIT 10
+            ),
+            h2h_participants AS (
+              SELECT
+                fp.fixture_id,
+                fp.team_id,
+                fp.location,
+                t.name AS team_name,
+                t.image_path AS team_logo
+              FROM {self._table("fixture_participants")} fp
+              JOIN h2h_fixtures h ON h.fixture_id = fp.fixture_id
+              LEFT JOIN {self._table("teams")} t
+                ON t.team_id = fp.team_id
+               AND t.league_id = fp.league_id
+               AND t.season_id = fp.season_id
+            ),
+            h2h_scores AS (
+              SELECT
+                fs.fixture_id,
+                fs.team_id,
+                MAX(fs.goals) AS goals
+              FROM {self._table("fixture_scores")} fs
+              JOIN h2h_fixtures h ON h.fixture_id = fs.fixture_id
+              WHERE fs.team_id IS NOT NULL
+                AND fs.goals IS NOT NULL
+              GROUP BY fs.fixture_id, fs.team_id
+            ),
             lineup AS (
               SELECT
                 l.fixture_id,
@@ -1355,6 +1416,38 @@ class BigQueryServingRepository:
                 s.details
               )) AS payload
             FROM season_standings s
+            UNION ALL
+
+            SELECT
+              'h2h' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                h.fixture_id AS id,
+                h.league_id AS competition_id,
+                h.season_id,
+                CAST(h.starting_at AS STRING) AS starting_at,
+                h.result_info,
+                h.name,
+                MAX(IF(p.location = 'home', p.team_id, NULL)) AS home_team_id,
+                MAX(IF(p.location = 'home', p.team_name, NULL)) AS home_team,
+                MAX(IF(p.location = 'home', p.team_logo, NULL)) AS home_team_logo,
+                MAX(IF(p.location = 'away', p.team_id, NULL)) AS away_team_id,
+                MAX(IF(p.location = 'away', p.team_name, NULL)) AS away_team,
+                MAX(IF(p.location = 'away', p.team_logo, NULL)) AS away_team_logo,
+                MAX(IF(p.location = 'home', score.goals, NULL)) AS home_score,
+                MAX(IF(p.location = 'away', score.goals, NULL)) AS away_score
+              )) AS payload
+            FROM h2h_fixtures h
+            LEFT JOIN h2h_participants p ON p.fixture_id = h.fixture_id
+            LEFT JOIN h2h_scores score
+              ON score.fixture_id = p.fixture_id
+             AND score.team_id = p.team_id
+            GROUP BY
+              h.fixture_id,
+              h.league_id,
+              h.season_id,
+              h.starting_at,
+              h.result_info,
+              h.name
             """,
             [bigquery.ScalarQueryParameter("fixture_id", "INT64", fixture_id)],
         )
@@ -1378,6 +1471,7 @@ class BigQueryServingRepository:
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
         normalized_match_facts: list[dict[str, Any]] = []
+        head_to_head: list[dict[str, Any]] = []
 
         for row in rows:
             kind = row["row_kind"]
@@ -1461,6 +1555,8 @@ class BigQueryServingRepository:
                 ball_coordinates.append(data)
             elif kind == "standing":
                 standings.append(data)
+            elif kind == "h2h":
+                head_to_head.append(data)
 
         if fixture is None:
             raise LookupError(f"Fixture {fixture_id} not found in BigQuery")
@@ -1587,6 +1683,11 @@ class BigQueryServingRepository:
             )
         )
 
+        head_to_head.sort(
+            key=lambda item: str(item.get("starting_at") or ""),
+            reverse=True,
+        )
+
         return {
             "fixture": fixture,
             "home_team": home,
@@ -1610,6 +1711,7 @@ class BigQueryServingRepository:
             "video_reference": video_reference,
             "video_events": video_events,
             "standings": standings,
+            "head_to_head": head_to_head,
             "source": "bigquery",
         }
 
