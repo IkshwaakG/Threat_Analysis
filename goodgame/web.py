@@ -1271,7 +1271,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             end = semantic_shot_end(item, team_side, context, kind)
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": None,
