@@ -286,6 +286,14 @@ def _event_detail(raw: Any) -> dict[str, Any]:
         return {}
 
     shot = raw.get("shot") if isinstance(raw.get("shot"), dict) else {}
+    subtype = (
+        raw.get("subtype")
+        if isinstance(raw.get("subtype"), dict)
+        else raw.get("subType")
+        if isinstance(raw.get("subType"), dict)
+        else {}
+    )
+    period = raw.get("period") if isinstance(raw.get("period"), dict) else {}
 
     def first(*values: Any) -> Any:
         for value in values:
@@ -304,13 +312,39 @@ def _event_detail(raw: Any) -> dict[str, Any]:
             )
         return value
 
+    subtype_name = scalar(first(
+        subtype.get("name"),
+        subtype.get("developer_name"),
+        subtype.get("code"),
+    ))
+    info = scalar(raw.get("info"))
+    body_part_hint = first(
+        raw.get("body_part"),
+        raw.get("bodypart"),
+        shot.get("body_part"),
+        shot.get("bodypart"),
+        subtype_name if subtype_name and any(token in str(subtype_name).casefold() for token in ("foot", "head")) else None,
+        info if info and any(token in str(info).casefold() for token in ("foot", "head")) else None,
+    )
+    period_minutes = scalar(period.get("minutes"))
+    period_seconds = scalar(period.get("seconds"))
+    period_clock = None
+    try:
+        if period_minutes is not None and period_seconds is not None:
+            period_clock = f"{int(period_minutes)}:{int(period_seconds):02d}"
+    except (TypeError, ValueError):
+        period_clock = None
+
     result = {
         "xg": scalar(first(raw.get("xg"), raw.get("expected_goals"), shot.get("xg"), shot.get("expected_goals"))),
         "xgot": scalar(first(raw.get("xgot"), raw.get("expected_goals_on_target"), shot.get("xgot"), shot.get("expected_goals_on_target"))),
-        "body_part": scalar(first(raw.get("body_part"), raw.get("bodypart"), shot.get("body_part"), shot.get("bodypart"))),
+        "body_part": scalar(body_part_hint),
         "situation": scalar(first(raw.get("situation"), raw.get("play_pattern"), shot.get("situation"), shot.get("play_pattern"))),
         "outcome": scalar(first(raw.get("outcome"), raw.get("result"), shot.get("outcome"), shot.get("result"))),
-        "shot_type": scalar(first(raw.get("shot_type"), shot.get("type"), raw.get("type"))),
+        "shot_type": scalar(first(subtype_name, raw.get("shot_type"), shot.get("type"), raw.get("type"))),
+        "sub_type": subtype_name,
+        "period_clock": period_clock,
+        "period_description": scalar(period.get("description")),
     }
     return {key: value for key, value in result.items() if value not in (None, "")}
 
