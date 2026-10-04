@@ -446,9 +446,11 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["player"], "Riccardo Calafiori")
         self.assertEqual(goal["detail"]["body_part"], "Header")
         self.assertEqual(goal["detail"]["situation"], "Corner")
-        self.assertEqual(goal["spatial"]["source"], "clustered_corner_goal")
-        self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
-        self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
+        self.assertEqual(goal["spatial"]["source"], "semantic_reconstructed")
+        self.assertEqual(goal["spatial"]["shot_start_index"], 0)
+        self.assertEqual(goal["spatial"]["phases"], [{"kind": "shot", "start_index": 0, "end_index": 1}])
+        self.assertEqual(goal["spatial"]["ball_track"][0]["x"], goal["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["ball_track"][0]["y"], goal["spatial"]["shot_actor_anchor"]["y"])
 
     def test_saved_comment_reclassifies_raw_off_target_shot(self):
         game = {
@@ -570,14 +572,11 @@ class GoodGameWebTests(unittest.TestCase):
         }
 
         event = next(item for item in _selectable_events(game) if item.get("id") == 9160)
-        timers = [
-            point.get("timer")
-            for point in event.get("spatial", {}).get("ball_track", [])
-        ]
-
-        self.assertIn("12:10", timers)
-        self.assertIn("12:16", timers)
-        self.assertNotIn("13:10", timers)
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
+        self.assertEqual(event["spatial"]["coordinate_support"]["terminal_timer"], "12:16")
+        self.assertEqual(event["spatial"]["coordinate_support"]["points"], 2)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["shot_actor_anchor"]["x"])
+        self.assertNotEqual(event["spatial"]["ball_track"][0].get("timer"), "13:10")
 
     def test_period_minutes_seconds_bound_ball_coordinate_join(self):
         game = {
@@ -800,10 +799,12 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["body_part"], "Right foot")
         self.assertEqual(event["detail"]["shot_origin"], "outside the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
-        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertNotIn("assist_actor_anchor", event["spatial"])
+        self.assertIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 24.0, "y": 50.0})
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
@@ -885,11 +886,13 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_origin"], "center of the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "blocked")
         self.assertEqual(event["detail"]["assist_type"], "cross")
-        self.assertEqual(event["spatial"]["source"], "stored_assist_shot")
+        self.assertEqual(event["spatial"]["source"], "semantic_fused")
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
-        self.assertNotIn("assist_actor_anchor", event["spatial"])
+        self.assertIn("assist_actor_anchor", event["spatial"])
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
         self.assertEqual(len(event["spatial"]["ball_track"]), 3)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
         self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
@@ -927,7 +930,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["head_to_head"][0]["id"], 41)
         self.assertEqual(body["head_to_head"][0]["home_score"], 1)
         shot = body["selectable_events"][0]["spatial"]
-        self.assertEqual(shot["source"], "stored")
+        self.assertIn(shot["source"], {"semantic_fused", "semantic_reconstructed"})
         self.assertGreaterEqual(len(shot["ball_track"]), 2)
         self.assertGreaterEqual(shot["ball_path"]["end"]["x"], 90.0)
         self.assertLessEqual(abs(shot["ball_path"]["end"]["y"] - 50.0), 9.0)
@@ -1027,12 +1030,13 @@ def test_goal_can_reuse_matching_shot_on_target_track():
 
 def test_event_minute_matches_same_sportmonks_timer_minute():
     def timer_window(event_minute: int, extra_minute: int = 0) -> tuple[int, int]:
-        match_minute = event_minute + extra_minute
-        return match_minute * 60, match_minute * 60 + 59
+        timer_minute = max(0, event_minute - 1 + extra_minute)
+        return timer_minute * 60, timer_minute * 60 + 59
 
-    assert timer_window(35) == (35 * 60, 35 * 60 + 59)
-    assert timer_window(37) == (37 * 60, 37 * 60 + 59)
-    assert timer_window(90) == (90 * 60, 90 * 60 + 59)
+    assert timer_window(13) == (12 * 60, 12 * 60 + 59)
+    assert timer_window(62) == (61 * 60, 61 * 60 + 59)
+    assert timer_window(45, 1) == (45 * 60, 45 * 60 + 59)
+    assert timer_window(45, 2) == (46 * 60, 46 * 60 + 59)
 
 
 def test_goal_matcher_must_not_use_kickoff_reset_as_goal_track():
