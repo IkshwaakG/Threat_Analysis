@@ -434,6 +434,210 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         )
     )
 
+    commentary_rows = [
+        item
+        for item in game.get("commentary", []) or []
+        if isinstance(item, dict)
+    ]
+
+    trends_value = game.get("trends") or []
+    if isinstance(trends_value, str):
+        try:
+            import json
+            trends_value = json.loads(trends_value)
+        except (TypeError, ValueError):
+            trends_value = []
+    trend_rows = [item for item in trends_value if isinstance(item, dict)] if isinstance(trends_value, list) else []
+
+    def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
+        try:
+            minute = int(item.get("minute"))
+        except (TypeError, ValueError):
+            return None
+
+        scorer = str(item.get("player") or "").strip().casefold()
+        candidates: list[tuple[int, int, dict[str, Any]]] = []
+        for comment in commentary_rows:
+            try:
+                comment_minute = int(comment.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            if comment_minute != minute:
+                continue
+            if kind == "goal" and comment.get("is_goal") is not True:
+                continue
+            text = str(comment.get("comment") or "")
+            score = 0
+            if scorer and scorer in text.casefold():
+                score -= 5
+            if kind == "goal" and "goal" in text.casefold():
+                score -= 3
+            if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in text.casefold():
+                score -= 2
+            candidates.append((score, int(comment.get("sort_order") or 999999), comment))
+
+        return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
+
+    def shot_context_from_comment(text: str) -> dict[str, Any]:
+        normalized = " ".join(str(text or "").split())
+        lower = normalized.casefold()
+        if not lower:
+            return {}
+
+        context: dict[str, Any] = {"commentary": normalized}
+
+        if "left-footed" in lower or "left footed" in lower or "left foot shot" in lower:
+            context["body_part"] = "Left foot"
+        elif "right-footed" in lower or "right footed" in lower or "right foot shot" in lower:
+            context["body_part"] = "Right foot"
+        elif "header" in lower or "headed" in lower:
+            context["body_part"] = "Header"
+
+        origin_phrases = (
+            "left side of the six-yard box",
+            "right side of the six-yard box",
+            "center of the six-yard box",
+            "centre of the six-yard box",
+            "left side of the box",
+            "right side of the box",
+            "center of the box",
+            "centre of the box",
+            "outside the box",
+            "very close range",
+            "over 35 yards",
+        )
+        for phrase in origin_phrases:
+            if phrase in lower:
+                context["shot_origin"] = phrase.replace("centre", "center")
+                break
+
+        goal_targets = (
+            "top left corner",
+            "top right corner",
+            "bottom left corner",
+            "bottom right corner",
+            "high center of the goal",
+            "high centre of the goal",
+            "center of the goal",
+            "centre of the goal",
+            "left side of the goal",
+            "right side of the goal",
+        )
+        for phrase in goal_targets:
+            if phrase in lower:
+                normalized_target = phrase.replace("centre", "center")
+                context["goal_target"] = normalized_target
+                if "top" in normalized_target or "high" in normalized_target:
+                    context["goal_height"] = "high"
+                    context["goal_height_ratio"] = 0.82
+                elif "bottom" in normalized_target:
+                    context["goal_height"] = "low"
+                    context["goal_height_ratio"] = 0.18
+                else:
+                    context["goal_height"] = "middle"
+                    context["goal_height_ratio"] = 0.48
+                if "left" in normalized_target:
+                    context["goal_side"] = "left"
+                elif "right" in normalized_target:
+                    context["goal_side"] = "right"
+                else:
+                    context["goal_side"] = "center"
+                break
+
+        for phrase in ("through ball", "cross", "cutback", "long ball"):
+            if phrase in lower:
+                context["assist_type"] = phrase
+                break
+
+        if "fast break" in lower:
+            context["situation"] = "Fast break"
+        elif "after a corner" in lower or "from a corner" in lower:
+            context["situation"] = "Corner"
+        elif "direct free kick" in lower:
+            context["situation"] = "Direct free kick"
+        elif "penalty" in lower:
+            context["situation"] = "Penalty"
+
+        return context
+
+    def trend_context_for_event(item: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            minute = int(item.get("minute"))
+        except (TypeError, ValueError):
+            return []
+        period_id = item.get("period_id")
+        result: list[dict[str, Any]] = []
+        for trend in trend_rows:
+            try:
+                trend_minute = int(trend.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            if trend_minute != minute:
+                continue
+            if period_id is not None and trend.get("period_id") not in (None, period_id):
+                continue
+            participant = trend.get("participant") if isinstance(trend.get("participant"), dict) else {}
+            result.append({
+                "id": trend.get("id"),
+                "type_id": trend.get("type_id"),
+                "minute": trend_minute,
+                "period_id": trend.get("period_id"),
+                "participant_id": trend.get("participant_id"),
+                "participant_name": participant.get("name"),
+                "participant_code": participant.get("short_code"),
+                "value": trend.get("value"),
+            })
+        return result[:20]
+
+    def semantic_shot_start(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float] | None:
+        origin = str(context.get("shot_origin") or "").casefold()
+        if not origin:
+            return None
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+
+        if "six-yard" in origin:
+            distance_from_goal = 6.0
+        elif "center of the box" in origin or "side of the box" in origin:
+            distance_from_goal = 14.0
+        elif "outside the box" in origin:
+            distance_from_goal = 24.0
+        elif "35 yards" in origin:
+            distance_from_goal = 34.0
+        elif "close range" in origin:
+            distance_from_goal = 5.0
+        else:
+            distance_from_goal = 18.0
+
+        x = 100.0 - distance_from_goal if attacks_right else distance_from_goal
+        if "left side" in origin:
+            y = 34.0 if attacks_right else 66.0
+        elif "right side" in origin:
+            y = 66.0 if attacks_right else 34.0
+        else:
+            y = 50.0
+        return {"x": x, "y": y}
+
+    def semantic_goal_end(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float]:
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+        side_label = str(context.get("goal_side") or "center").casefold()
+        if side_label == "left":
+            y = 46.0 if attacks_right else 54.0
+        elif side_label == "right":
+            y = 54.0 if attacks_right else 46.0
+        else:
+            y = 50.0
+        return {"x": target_x, "y": y}
+
     def event_coordinate_track(
         item: dict[str, Any],
         spatial_data: dict[str, Any],
