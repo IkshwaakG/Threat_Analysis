@@ -882,7 +882,20 @@ class BigQueryServingRepository:
                 t.image_path AS team_logo,
                 s.position,
                 s.points,
-                s.details
+                ARRAY(
+                  SELECT AS STRUCT
+                    SAFE_CAST(JSON_VALUE(detail, '$.type_id') AS INT64) AS type_id,
+                    ty.name,
+                    ty.developer_name,
+                    COALESCE(
+                      JSON_VALUE(detail, '$.value'),
+                      JSON_VALUE(detail, '$.value.total'),
+                      JSON_VALUE(detail, '$.value.count')
+                    ) AS value
+                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(s.details), [])) AS detail
+                  LEFT JOIN {self._table("types")} ty
+                    ON ty.type_id = SAFE_CAST(JSON_VALUE(detail, '$.type_id') AS INT64)
+                ) AS details
               FROM {self._table("standings")} s
               CROSS JOIN fixture f
               LEFT JOIN {self._table("teams")} t
