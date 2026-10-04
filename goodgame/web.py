@@ -449,6 +449,24 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             trends_value = []
     trend_rows = [item for item in trends_value if isinstance(item, dict)] if isinstance(trends_value, list) else []
 
+    trend_type_labels: dict[int, dict[str, Any]] = {}
+    for stat_group in (
+        game.get("game_stats", []) or [],
+        game.get("home_team", {}).get("stats", []) or [],
+        game.get("away_team", {}).get("stats", []) or [],
+    ):
+        for stat in stat_group:
+            if not isinstance(stat, dict) or stat.get("type_id") is None:
+                continue
+            try:
+                type_id = int(stat["type_id"])
+            except (TypeError, ValueError):
+                continue
+            trend_type_labels[type_id] = {
+                "name": stat.get("name"),
+                "developer_name": stat.get("developer_name"),
+            }
+
     def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
         try:
             minute = int(item.get("minute"))
@@ -577,9 +595,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if period_id is not None and trend.get("period_id") not in (None, period_id):
                 continue
             participant = trend.get("participant") if isinstance(trend.get("participant"), dict) else {}
+            try:
+                trend_type_id = int(trend.get("type_id")) if trend.get("type_id") is not None else None
+            except (TypeError, ValueError):
+                trend_type_id = None
+            labels = trend_type_labels.get(trend_type_id or -1, {})
             result.append({
                 "id": trend.get("id"),
-                "type_id": trend.get("type_id"),
+                "type_id": trend_type_id,
+                "name": labels.get("name"),
+                "developer_name": labels.get("developer_name"),
                 "minute": trend_minute,
                 "period_id": trend.get("period_id"),
                 "participant_id": trend.get("participant_id"),
