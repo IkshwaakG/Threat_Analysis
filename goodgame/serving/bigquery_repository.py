@@ -1120,6 +1120,18 @@ class BigQueryServingRepository:
               LEFT JOIN {self._table("types")} ty USING (type_id)
               WHERE t.fixture_id = @fixture_id
             ),
+            commentary AS (
+              SELECT
+                commentary_id,
+                minute,
+                extra_minute,
+                comment,
+                is_goal,
+                is_important,
+                sort_order
+              FROM {self._table("fixture_comments")}
+              WHERE fixture_id = @fixture_id
+            ),
             scores AS (
               SELECT score_id, type_id, team_id, goals, participant, description
               FROM {self._table("fixture_scores")}
@@ -1289,6 +1301,21 @@ class BigQueryServingRepository:
                 t.raw_timeline
               )) AS payload
             FROM timeline t
+
+            UNION ALL
+
+            SELECT
+              'commentary' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                c.commentary_id AS id,
+                c.minute,
+                c.extra_minute,
+                c.comment,
+                c.is_goal,
+                c.is_important,
+                c.sort_order
+              )) AS payload
+            FROM commentary c
 
             UNION ALL
 
@@ -1506,6 +1533,7 @@ class BigQueryServingRepository:
         game_stats: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         timeline: list[dict[str, Any]] = []
+        commentary: list[dict[str, Any]] = []
         scores: list[dict[str, Any]] = []
         venue: dict[str, Any] | None = None
         weather: dict[str, Any] | None = None
@@ -1579,6 +1607,8 @@ class BigQueryServingRepository:
                     event_type=str(data.get("type") or data.get("text") or "timeline"),
                 )
                 timeline.append(data)
+            elif kind == "commentary":
+                commentary.append(data)
             elif kind == "score":
                 scores.append(data)
             elif kind == "venue":
@@ -1707,6 +1737,14 @@ class BigQueryServingRepository:
             )
         )
 
+        commentary.sort(
+            key=lambda item: (
+                item.get("sort_order") if item.get("sort_order") is not None else -1,
+                item.get("id") if item.get("id") is not None else -1,
+            ),
+            reverse=True,
+        )
+
         def _timer_seconds(item: dict[str, Any]) -> tuple[int, int]:
             timer = str(item.get("timer") or "")
             try:
@@ -1742,6 +1780,7 @@ class BigQueryServingRepository:
             "players": players,
             "events": events,
             "timeline": timeline,
+            "commentary": commentary,
             "scores": scores,
             "venue": venue,
             "weather": weather,
