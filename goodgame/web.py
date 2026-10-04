@@ -1033,15 +1033,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             (point, seconds)
             for point, seconds in coordinate_stream
             if (event_period_id is None or point.get("period_id") == event_period_id)
-            and (period_clock_floor is None or seconds >= period_clock_floor - 2)
-            and (period_clock_ceiling is None or seconds <= period_clock_ceiling + 2)
+            and (period_clock_floor is None or seconds >= period_clock_floor)
+            and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
         ]
         if not same_period:
             same_period = [
                 (point, seconds)
                 for point, seconds in coordinate_stream
-                if (period_clock_floor is None or seconds >= period_clock_floor - 2)
-                and (period_clock_ceiling is None or seconds <= period_clock_ceiling + 2)
+                if (period_clock_floor is None or seconds >= period_clock_floor)
+                and (period_clock_ceiling is None or seconds <= period_clock_ceiling)
             ]
 
         # Search both plausible timer windows, with a small boundary pad.
