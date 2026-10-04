@@ -1285,9 +1285,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         #   45+2' -> 46:00-46:59
         # Therefore the canonical timer minute is minute - 1 + extra_minute.
         timer_minute = max(0, minute - 1 + extra)
-        candidate_windows = [
-            (max(0, timer_minute * 60 - 16), timer_minute * 60 + 69)
+        target_windows = [
+            (timer_minute * 60, timer_minute * 60 + 59)
         ]
+        # The displayed shot/goal minute represents the outcome time. The
+        # pass/shot launch may start shortly before that minute boundary, so
+        # allow a short backward support window but never treat it as the
+        # event's terminal minute.
+        support_start = max(0, target_windows[0][0] - 24)
+        support_end = target_windows[0][1]
         event_period_id = item.get("period_id")
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
@@ -1355,7 +1361,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         time_candidates = [
             (point, seconds)
             for point, seconds in same_period
-            if any(start <= seconds <= end for start, end in candidate_windows)
+            if support_start <= seconds <= support_end
         ]
         if not time_candidates:
             return []
@@ -1377,7 +1383,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         def time_score(seconds: int) -> float:
             best = float("inf")
-            for start, end in candidate_windows:
+            for start, end in target_windows:
                 if start <= seconds <= end:
                     return 0.0
                 best = min(best, abs(seconds - start), abs(seconds - end))
@@ -1442,6 +1448,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 end_point, end_second = compact_rows[end_index]
                 end_distance = distance_to_target_goal(end_point)
 
+                # For a shot/goal, the event minute is the outcome minute. A
+                # candidate whose terminal point is outside that minute can
+                # support buildup context but cannot be the event trajectory.
+                if not any(start <= end_second <= end for start, end in target_windows):
+                    continue
+
                 # Endpoint must plausibly reach the goal zone for the event.
                 if end_distance > max_goal_distance:
                     continue
@@ -1469,7 +1481,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 score = (
                     end_distance * 4.0
                     + center_distance * (1.7 if on_target else 0.0)
-                    + time_score(launch_second) * 0.2
+                    + time_score(end_second) * 0.2
                     + duration * 0.08
                     + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                     - total_progress * 0.45
@@ -1505,7 +1517,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             ) ** 0.5
                         sparse.append((
                             end_distance * 4.0
-                            + time_score(launch_second) * 0.2
+                            + time_score(end_second) * 0.2
                             + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                             - progress * 0.4,
                             launch_index,
@@ -1601,7 +1613,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         time_score(row[1]),
                         min(
                             abs(row[1] - (start + 30))
-                            for start, _ in candidate_windows
+                            for start, _ in target_windows
                         ),
                     ),
                 )
