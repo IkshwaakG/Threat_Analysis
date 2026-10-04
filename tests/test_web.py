@@ -150,6 +150,23 @@ class FakeServingRepository:
                     ],
                 }
             ],
+            "match_facts": [
+                {
+                    "id": 701,
+                    "fixture_id": fixture_id,
+                    "type_id": 99,
+                    "participant": "home",
+                    "basis": "team",
+                    "category": "streaks",
+                    "scope": "league_matches",
+                    "natural_language": "Manchester United have scored in 6 consecutive league matches.",
+                    "data": {"streak": 6},
+                    "related_player": None,
+                }
+            ],
+            "ai_overviews": [
+                {"id": 801, "summary": "Manchester United enter the fixture in strong scoring form."}
+            ],
             "source": "bigquery",
         }
 
@@ -243,6 +260,9 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["home_team"]["name"], "Manchester United")
         self.assertEqual(body["players"][0]["player_id"], 10)
         self.assertTrue(body["selectable_events"])
+        self.assertEqual(body["match_facts"][0]["category"], "streaks")
+        self.assertIn("6 consecutive", body["match_facts"][0]["natural_language"])
+        self.assertTrue(body["ai_overviews"])
         shot = body["selectable_events"][0]["spatial"]
         self.assertEqual(shot["source"], "stored")
         self.assertGreaterEqual(len(shot["ball_track"]), 2)
