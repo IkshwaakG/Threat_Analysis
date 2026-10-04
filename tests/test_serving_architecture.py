@@ -26,6 +26,10 @@ class ServingArchitectureTests(unittest.TestCase):
         self.assertIn('"video_events": video_events', serving)
         self.assertIn('self._table("fixture_participants")', serving)
         self.assertIn('"head_to_head": head_to_head', serving)
+        self.assertNotIn("AND EXISTS (", serving)
+        self.assertNotIn("ARRAY(\n                  SELECT AS STRUCT", serving)
+        self.assertIn("h2h_candidates AS (", serving)
+        self.assertIn("season_standing_details AS (", serving)
         self.assertIn('self._table("fixture_lineups")', serving)
         self.assertIn('"ball_coordinates": ball_coordinates', serving)
 
