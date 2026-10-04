@@ -499,7 +499,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if role == "shooter":
             anchors = [
                 lower.find(token)
-                for token in (" shot", " strike", " attempt", " header", " shoots", " fires")
+                for token in (
+                    " shot",
+                    " strike",
+                    " attempt",
+                    " header",
+                    " heads the ball",
+                    " headed the ball",
+                    " shoots",
+                    " fires",
+                )
                 if lower.find(token) >= 0
             ]
         else:
@@ -675,7 +684,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["body_part"] = "Left foot"
         elif "right-footed" in lower or "right footed" in lower or "right foot shot" in lower:
             context["body_part"] = "Right foot"
-        elif "header" in lower or "headed" in lower:
+        elif (
+            "header" in lower
+            or "headed" in lower
+            or "heads the ball" in lower
+            or "head the ball" in lower
+        ):
             context["body_part"] = "Header"
 
         origin_phrases = (
@@ -782,6 +796,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if phrase in lower:
                 context["shot_outcome_hint"] = outcome
                 break
+
+        if "shot_outcome_hint" not in context and (
+            "miss" in lower or "attempt missed" in lower
+        ):
+            if "to the left" in lower or "goes left" in lower or "wide left" in lower:
+                context["shot_outcome_hint"] = "left"
+            elif "to the right" in lower or "goes right" in lower or "wide right" in lower:
+                context["shot_outcome_hint"] = "right"
+            elif "over" in lower or "high" in lower:
+                context["shot_outcome_hint"] = "high"
 
         for phrase in ("through ball", "cross", "cutback", "long ball"):
             if phrase in lower:
