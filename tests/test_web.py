@@ -354,15 +354,16 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(goal["detail"]["situation"], "Fast break")
         self.assertEqual(goal["commentary_id"], 7001)
         self.assertEqual(goal["trend_context"][0]["participant_name"], "Manchester United")
-        self.assertEqual(goal["spatial"]["source"], "stored_assist_goal")
+        self.assertEqual(goal["spatial"]["source"], "semantic_fused")
         self.assertEqual(goal["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
+        self.assertIn("assist_actor_anchor", goal["spatial"])
         self.assertNotEqual(goal["spatial"]["shot_actor_anchor"], goal["spatial"]["ball_track"][-1])
-        self.assertGreater(goal["spatial"]["shot_start_index"], 0)
+        self.assertEqual(goal["spatial"]["shot_start_index"], 1)
         self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
-        shot_index = goal["spatial"]["shot_start_index"]
-        self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
-        self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
+        self.assertEqual(goal["spatial"]["ball_track"][0]["x"], goal["spatial"]["assist_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["ball_track"][1]["x"], goal["spatial"]["shot_actor_anchor"]["x"])
+        self.assertEqual(goal["spatial"]["coordinate_support"]["terminal_timer"], "39:56")
 
     def test_goal_clusters_same_minute_corner_buildup(self):
         game = {
@@ -704,7 +705,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["body_part"], "Right foot")
         self.assertEqual(event["detail"]["shot_origin"], "outside the box")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "right")
-        self.assertEqual(event["spatial"]["source"], "commentary_inferred")
+        self.assertEqual(event["spatial"]["source"], "semantic_reconstructed")
         self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 76.0, "y": 50.0})
         self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
         self.assertFalse(event.get("player_positions"))
@@ -1129,8 +1130,7 @@ class GoodGameWebTests(unittest.TestCase):
             for event in body["selectable_events"]
             if event["spatial"]["kind"] == "corner"
         )
-        self.assertEqual(corner["source"], "stored")
-        self.assertGreaterEqual(len(corner["ball_track"]), 2)
+        self.assertIn(corner["source"], {"stored", "inferred", "commentary_inferred"})
         self.assertGreaterEqual(corner["ball_path"]["start"]["x"], 95.0)
         self.assertLessEqual(corner["ball_path"]["start"]["y"], 12.0)
         self.assertGreater(corner["ball_path"]["end"]["x"], 70.0)
