@@ -114,6 +114,17 @@ class FakeServingRepository:
                 }
             ],
             "timeline": [],
+            "commentary": [
+                {
+                    "id": 5001,
+                    "minute": 12,
+                    "extra_minute": None,
+                    "comment": "Bruno Fernandes tests the goalkeeper from outside the box.",
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 9,
+                }
+            ],
             "ball_coordinates": [
                 {"id": 1, "period_id": 100, "timer": "09:55", "x": 61.0, "y": 48.0},
                 {"id": 2, "period_id": 100, "timer": "10:00", "x": 44.0, "y": 74.0},
@@ -248,6 +259,169 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(video_only["spatial"]["source"], "video")
         self.assertEqual(len(video_only["spatial"]["ball_track"]), 2)
 
+    def test_goal_reconstruction_uses_assist_commentary_and_ball_timers(self):
+        game = {
+            "home_team": {"id": 1, "name": "Manchester United"},
+            "away_team": {"id": 2, "name": "Ipswich Town"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Bruno Fernandes",
+                    "team_id": 1,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 8,
+                    "position_id": 26,
+                    "formation_field": "3:2",
+                    "formation_position": 6,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 11,
+                    "name": "Matheus Cunha",
+                    "team_id": 1,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 10,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                },
+            ],
+            "events": [
+                {
+                    "id": 9100,
+                    "minute": 40,
+                    "extra_minute": None,
+                    "period_id": 100,
+                    "type": "goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Bruno Fernandes",
+                    "related_player_id": 11,
+                    "related_player_name": "Matheus Cunha",
+                    "is_home": True,
+                    "detail": {"body_part": "Left foot shot"},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7001,
+                    "minute": 40,
+                    "extra_minute": None,
+                    "comment": (
+                        "Goal! Bruno Fernandes scores for Manchester United with a left-footed "
+                        "shot from the center of the box into the top left corner, assisted by "
+                        "Matheus Cunha's through ball after a fast break."
+                    ),
+                    "is_goal": True,
+                    "is_important": True,
+                    "sort_order": 42,
+                }
+            ],
+            "trends": [
+                {
+                    "id": 8001,
+                    "fixture_id": 42,
+                    "participant_id": 1,
+                    "type_id": 45,
+                    "period_id": 100,
+                    "value": 61,
+                    "minute": 40,
+                    "participant": {"id": 1, "name": "Manchester United", "short_code": "MUN"},
+                }
+            ],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 100, "timer": "39:40", "x": 65.0, "y": 48.0},
+                {"id": 2, "period_id": 100, "timer": "39:45", "x": 75.0, "y": 49.0},
+                {"id": 3, "period_id": 100, "timer": "39:50", "x": 86.0, "y": 50.0},
+                {"id": 4, "period_id": 100, "timer": "39:53", "x": 95.0, "y": 48.0},
+                {"id": 5, "period_id": 100, "timer": "39:56", "x": 99.0, "y": 46.0},
+            ],
+            "video_events": [],
+        }
+
+        events = _selectable_events(game)
+        goal = next(event for event in events if event.get("id") == 9100)
+
+        self.assertEqual(goal["detail"]["body_part"], "Left foot shot")
+        self.assertEqual(goal["detail"]["shot_origin"], "center of the box")
+        self.assertEqual(goal["detail"]["goal_target"], "top left corner")
+        self.assertEqual(goal["detail"]["assist_type"], "through ball")
+        self.assertEqual(goal["detail"]["situation"], "Fast break")
+        self.assertEqual(goal["commentary_id"], 7001)
+        self.assertEqual(goal["trend_context"][0]["participant_name"], "Manchester United")
+        self.assertEqual(goal["spatial"]["source"], "stored_assist_goal")
+        self.assertEqual(goal["spatial"]["shot_actor_anchor"], {"x": 86.0, "y": 50.0})
+        self.assertNotEqual(goal["spatial"]["shot_actor_anchor"], goal["spatial"]["ball_track"][-1])
+        self.assertGreater(goal["spatial"]["shot_start_index"], 0)
+        self.assertEqual(goal["spatial"]["phases"][0]["kind"], "assist")
+        self.assertEqual(goal["spatial"]["phases"][1]["kind"], "shot")
+        shot_index = goal["spatial"]["shot_start_index"]
+        self.assertEqual(goal["spatial"]["ball_track"][shot_index]["timer"], "39:50")
+        self.assertEqual(goal["spatial"]["ball_track"][0]["timer"], "39:40")
+
+    def test_off_target_commentary_guides_shot_without_inventing_player_tracking(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 20,
+                    "name": "Shooter",
+                    "team_id": 2,
+                    "team_name": "Away",
+                    "team_location": "away",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9200,
+                    "minute": 61,
+                    "period_id": 200,
+                    "type": "shot_off_target",
+                    "text": "Shot off target",
+                    "team_id": 2,
+                    "player_id": 20,
+                    "player": "Shooter",
+                    "is_home": False,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 7100,
+                    "minute": 61,
+                    "comment": "Shooter's right-footed shot from outside the box misses to the right.",
+                    "is_goal": False,
+                    "is_important": False,
+                    "sort_order": 20,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9200)
+        self.assertEqual(event["commentary_id"], 7100)
+        self.assertEqual(event["detail"]["body_part"], "Right foot")
+        self.assertEqual(event["detail"]["shot_origin"], "outside the box")
+        self.assertEqual(event["detail"]["shot_outcome_hint"], "right")
+        self.assertEqual(event["spatial"]["source"], "commentary_inferred")
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 76.0, "y": 50.0})
+        self.assertGreater(event["spatial"]["ball_path"]["end"]["y"], 50.0)
+        self.assertFalse(event.get("player_positions"))
+
     def test_search_endpoint_uses_serving_repository(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
             response = self.client.get(
@@ -273,6 +447,8 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(body["home_team"]["name"], "Manchester United")
         self.assertEqual(body["players"][0]["player_id"], 10)
         self.assertTrue(body["selectable_events"])
+        self.assertEqual(body["commentary"][0]["id"], 5001)
+        self.assertTrue(body["commentary"][0]["is_important"])
         self.assertEqual(body["match_facts"][0]["category"], "streaks")
         self.assertIn("6 consecutive", body["match_facts"][0]["natural_language"])
         self.assertTrue(body["ai_overviews"])

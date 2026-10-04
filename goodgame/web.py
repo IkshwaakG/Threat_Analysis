@@ -434,6 +434,303 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         )
     )
 
+    commentary_rows = [
+        item
+        for item in game.get("commentary", []) or []
+        if isinstance(item, dict)
+    ]
+
+    trends_value = game.get("trends") or []
+    if isinstance(trends_value, str):
+        try:
+            import json
+            trends_value = json.loads(trends_value)
+        except (TypeError, ValueError):
+            trends_value = []
+    trend_rows = [item for item in trends_value if isinstance(item, dict)] if isinstance(trends_value, list) else []
+
+    trend_type_labels: dict[int, dict[str, Any]] = {}
+    for stat_group in (
+        game.get("game_stats", []) or [],
+        game.get("home_team", {}).get("stats", []) or [],
+        game.get("away_team", {}).get("stats", []) or [],
+    ):
+        for stat in stat_group:
+            if not isinstance(stat, dict) or stat.get("type_id") is None:
+                continue
+            try:
+                type_id = int(stat["type_id"])
+            except (TypeError, ValueError):
+                continue
+            trend_type_labels[type_id] = {
+                "name": stat.get("name"),
+                "developer_name": stat.get("developer_name"),
+            }
+
+    def commentary_for_event(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
+        try:
+            minute = int(item.get("minute"))
+        except (TypeError, ValueError):
+            return None
+
+        scorer = str(item.get("player") or "").strip().casefold()
+        candidates: list[tuple[int, int, dict[str, Any]]] = []
+        for comment in commentary_rows:
+            try:
+                comment_minute = int(comment.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            if comment_minute != minute:
+                continue
+            if kind == "goal" and comment.get("is_goal") is not True:
+                continue
+            text = str(comment.get("comment") or "")
+            lower_text = text.casefold()
+            score = 0
+            if scorer and scorer in lower_text:
+                score -= 5
+            if item.get("related_player_name") and str(item.get("related_player_name")).casefold() in lower_text:
+                score -= 2
+
+            kind_tokens = {
+                "goal": ("goal", "scores"),
+                "shot_off_target": ("miss", "wide", "off target"),
+                "shot_on_target": ("shot", "saved", "on target"),
+                "shot": ("shot", "attempt"),
+                "corner": ("corner",),
+                "card": ("card", "booked", "yellow", "red"),
+                "offside": ("offside",),
+                "foul": ("foul", "free kick"),
+                "penalty": ("penalty",),
+            }
+            tokens = kind_tokens.get(kind, ())
+            if any(token in lower_text for token in tokens):
+                score -= 3
+
+            if kind == "goal" and comment.get("is_goal") is not True:
+                score += 4
+            if kind != "goal" and comment.get("is_goal") is True:
+                score += 5
+
+            candidates.append((score, int(comment.get("sort_order") or 999999), comment))
+
+        return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
+
+    def shot_context_from_comment(text: str) -> dict[str, Any]:
+        normalized = " ".join(str(text or "").split())
+        lower = normalized.casefold()
+        if not lower:
+            return {}
+
+        context: dict[str, Any] = {"commentary": normalized}
+
+        if "left-footed" in lower or "left footed" in lower or "left foot shot" in lower:
+            context["body_part"] = "Left foot"
+        elif "right-footed" in lower or "right footed" in lower or "right foot shot" in lower:
+            context["body_part"] = "Right foot"
+        elif "header" in lower or "headed" in lower:
+            context["body_part"] = "Header"
+
+        origin_phrases = (
+            "left side of the six-yard box",
+            "right side of the six-yard box",
+            "center of the six-yard box",
+            "centre of the six-yard box",
+            "left side of the box",
+            "right side of the box",
+            "center of the box",
+            "centre of the box",
+            "outside the box",
+            "very close range",
+            "over 35 yards",
+        )
+        for phrase in origin_phrases:
+            if phrase in lower:
+                context["shot_origin"] = phrase.replace("centre", "center")
+                break
+
+        goal_targets = (
+            "top left corner",
+            "top right corner",
+            "bottom left corner",
+            "bottom right corner",
+            "high center of the goal",
+            "high centre of the goal",
+            "center of the goal",
+            "centre of the goal",
+            "left side of the goal",
+            "right side of the goal",
+        )
+        for phrase in goal_targets:
+            if phrase in lower:
+                normalized_target = phrase.replace("centre", "center")
+                context["goal_target"] = normalized_target
+                if "top" in normalized_target or "high" in normalized_target:
+                    context["goal_height"] = "high"
+                    context["goal_height_ratio"] = 0.82
+                elif "bottom" in normalized_target:
+                    context["goal_height"] = "low"
+                    context["goal_height_ratio"] = 0.18
+                else:
+                    context["goal_height"] = "middle"
+                    context["goal_height_ratio"] = 0.48
+                if "left" in normalized_target:
+                    context["goal_side"] = "left"
+                elif "right" in normalized_target:
+                    context["goal_side"] = "right"
+                else:
+                    context["goal_side"] = "center"
+                break
+
+        miss_phrases = (
+            ("misses to the left", "left"),
+            ("missed to the left", "left"),
+            ("wide to the left", "left"),
+            ("misses to the right", "right"),
+            ("missed to the right", "right"),
+            ("wide to the right", "right"),
+            ("too high", "high"),
+            ("over the bar", "high"),
+            ("hits the bar", "bar"),
+            ("hits the post", "post"),
+            ("blocked", "blocked"),
+            ("saved", "saved"),
+        )
+        for phrase, outcome in miss_phrases:
+            if phrase in lower:
+                context["shot_outcome_hint"] = outcome
+                break
+
+        for phrase in ("through ball", "cross", "cutback", "long ball"):
+            if phrase in lower:
+                context["assist_type"] = phrase
+                break
+
+        if "fast break" in lower:
+            context["situation"] = "Fast break"
+        elif "after a corner" in lower or "from a corner" in lower:
+            context["situation"] = "Corner"
+        elif "direct free kick" in lower:
+            context["situation"] = "Direct free kick"
+        elif "penalty" in lower:
+            context["situation"] = "Penalty"
+
+        return context
+
+    def trend_context_for_event(item: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            minute = int(item.get("minute"))
+        except (TypeError, ValueError):
+            return []
+        period_id = item.get("period_id")
+        result: list[dict[str, Any]] = []
+        for trend in trend_rows:
+            try:
+                trend_minute = int(trend.get("minute"))
+            except (TypeError, ValueError):
+                continue
+            if trend_minute != minute:
+                continue
+            if period_id is not None and trend.get("period_id") not in (None, period_id):
+                continue
+            participant = trend.get("participant") if isinstance(trend.get("participant"), dict) else {}
+            try:
+                trend_type_id = int(trend.get("type_id")) if trend.get("type_id") is not None else None
+            except (TypeError, ValueError):
+                trend_type_id = None
+            labels = trend_type_labels.get(trend_type_id or -1, {})
+            result.append({
+                "id": trend.get("id"),
+                "type_id": trend_type_id,
+                "name": labels.get("name"),
+                "developer_name": labels.get("developer_name"),
+                "minute": trend_minute,
+                "period_id": trend.get("period_id"),
+                "participant_id": trend.get("participant_id"),
+                "participant_name": participant.get("name"),
+                "participant_code": participant.get("short_code"),
+                "value": trend.get("value"),
+            })
+        return result[:20]
+
+    def semantic_shot_start(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float] | None:
+        origin = str(context.get("shot_origin") or "").casefold()
+        if not origin:
+            return None
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+
+        if "six-yard" in origin:
+            distance_from_goal = 6.0
+        elif "center of the box" in origin or "side of the box" in origin:
+            distance_from_goal = 14.0
+        elif "outside the box" in origin:
+            distance_from_goal = 24.0
+        elif "35 yards" in origin:
+            distance_from_goal = 34.0
+        elif "close range" in origin:
+            distance_from_goal = 5.0
+        else:
+            distance_from_goal = 18.0
+
+        x = 100.0 - distance_from_goal if attacks_right else distance_from_goal
+        if "left side" in origin:
+            y = 34.0 if attacks_right else 66.0
+        elif "right side" in origin:
+            y = 66.0 if attacks_right else 34.0
+        else:
+            y = 50.0
+        return {"x": x, "y": y}
+
+    def semantic_shot_end(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+        kind: str,
+    ) -> dict[str, float]:
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        hint = str(context.get("shot_outcome_hint") or "").casefold()
+        if hint == "left":
+            y = 50.0 - (GOAL_HALF_WIDTH_PERCENT + 2.6)
+        elif hint == "right":
+            y = 50.0 + (GOAL_HALF_WIDTH_PERCENT + 2.6)
+        elif hint in {"high", "bar"}:
+            y = 50.0
+        elif hint == "post":
+            y = 50.0 + GOAL_HALF_WIDTH_PERCENT
+        elif kind == "shot_off_target":
+            seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
+            offsets = (
+                -(GOAL_HALF_WIDTH_PERCENT + 3.2),
+                -(GOAL_HALF_WIDTH_PERCENT + 1.8),
+                GOAL_HALF_WIDTH_PERCENT + 1.8,
+                GOAL_HALF_WIDTH_PERCENT + 3.2,
+            )
+            y = 50.0 + offsets[seed % len(offsets)]
+        else:
+            y = 50.0
+        return {"x": target_x, "y": y}
+
+    def semantic_goal_end(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float]:
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+        side_label = str(context.get("goal_side") or "center").casefold()
+        if side_label == "left":
+            y = 46.0 if attacks_right else 54.0
+        elif side_label == "right":
+            y = 54.0 if attacks_right else 46.0
+        else:
+            y = 50.0
+        return {"x": target_x, "y": y}
+
     def event_coordinate_track(
         item: dict[str, Any],
         spatial_data: dict[str, Any],
@@ -481,6 +778,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         event_period_id = item.get("period_id")
         team_side = side(item)
         target_goal_x = attacking_x(item, team_side, 100.0, 0.0)
+        detail_context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        semantic_launch = semantic_shot_start(item, team_side, detail_context)
 
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -621,11 +920,18 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 # Favor a strong, compact shot movement whose terminal sample
                 # is near the correct goal and temporally close to the event.
                 duration = max(1, end_second - launch_second)
+                launch_semantic_distance = 0.0
+                if semantic_launch is not None:
+                    launch_semantic_distance = (
+                        (float(launch_point["x"]) - float(semantic_launch["x"])) ** 2
+                        + (float(launch_point["y"]) - float(semantic_launch["y"])) ** 2
+                    ) ** 0.5
                 score = (
                     end_distance * 4.0
                     + center_distance * (1.7 if on_target else 0.0)
                     + time_score(launch_second) * 0.2
                     + duration * 0.08
+                    + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
                     - total_progress * 0.45
                 )
                 candidates.append((score, launch_index, end_index))
@@ -651,8 +957,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             continue
                         if on_target and goal_center_distance(end_point) > GOAL_HALF_WIDTH_PERCENT + 8.0:
                             continue
+                        launch_semantic_distance = 0.0
+                        if semantic_launch is not None:
+                            launch_semantic_distance = (
+                                (float(launch_point["x"]) - float(semantic_launch["x"])) ** 2
+                                + (float(launch_point["y"]) - float(semantic_launch["y"])) ** 2
+                            ) ** 0.5
                         sparse.append((
-                            end_distance * 4.0 + time_score(launch_second) * 0.2 - progress * 0.4,
+                            end_distance * 4.0
+                            + time_score(launch_second) * 0.2
+                            + launch_semantic_distance * (1.15 if semantic_launch is not None else 0.0)
+                            - progress * 0.4,
                             launch_index,
                             end_index,
                         ))
@@ -757,8 +1072,96 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         return result
 
+    def extend_goal_track_with_assist(
+        item: dict[str, Any],
+        shot_track: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Prepend the most plausible stored assist pass to a goal shot track.
+
+        The goal event minute does not carry an event second. The shot segment is
+        first located from provider ball-coordinate timers. If the event has a
+        related player/assist, walk backwards from the shot launch through the
+        same period and keep only a short, continuous sequence ending at the
+        scorer's launch point.
+        """
+        if len(shot_track) < 2:
+            return shot_track, 0
+        if not (item.get("related_player_id") or item.get("related_player_name")):
+            return shot_track, 0
+
+        shot_start_seconds = timer_seconds(shot_track[0].get("timer"))
+        if shot_start_seconds is None:
+            return shot_track, 0
+
+        period_id = item.get("period_id")
+        shot_start = shot_track[0]
+        previous_rows = [
+            (point, seconds)
+            for point, seconds in coordinate_stream
+            if seconds < shot_start_seconds
+            and seconds >= shot_start_seconds - 20
+            and (period_id is None or point.get("period_id") == period_id)
+        ]
+        if not previous_rows:
+            return shot_track, 0
+
+        compact: list[tuple[dict[str, Any], int]] = []
+        for point, seconds in previous_rows:
+            if compact:
+                prev = compact[-1][0]
+                if (
+                    abs(float(point["x"]) - float(prev["x"])) < 0.01
+                    and abs(float(point["y"]) - float(prev["y"])) < 0.01
+                ):
+                    continue
+            compact.append((point, seconds))
+
+        selected_reversed: list[tuple[dict[str, Any], int]] = []
+        next_point = shot_start
+        next_seconds = shot_start_seconds
+
+        for point, seconds in reversed(compact):
+            gap = next_seconds - seconds
+            if gap > 10:
+                break
+            step = (
+                (float(next_point["x"]) - float(point["x"])) ** 2
+                + (float(next_point["y"]) - float(point["y"])) ** 2
+            ) ** 0.5
+            if step > 42.0:
+                break
+            selected_reversed.append((point, seconds))
+            next_point = point
+            next_seconds = seconds
+            if shot_start_seconds - seconds >= 15 or len(selected_reversed) >= 3:
+                break
+
+        if not selected_reversed:
+            return shot_track, 0
+
+        prefix = list(reversed(selected_reversed))
+        first = prefix[0][0]
+        progress = (
+            (float(shot_start["x"]) - float(first["x"])) ** 2
+            + (float(shot_start["y"]) - float(first["y"])) ** 2
+        ) ** 0.5
+        if progress < 2.0:
+            return shot_track, 0
+
+        normalized_prefix = [
+            {
+                "x": round(float(point["x"]), 3),
+                "y": round(float(point["y"]), 3),
+                "timer": point.get("timer"),
+                "period_id": point.get("period_id"),
+            }
+            for point, _ in prefix
+        ]
+        return normalized_prefix + shot_track, len(normalized_prefix)
+
     def spatial(item: dict[str, Any], kind: str) -> dict[str, Any]:
         team_side = side(item)
+        context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
         player = player_for(item)
         player_anchor = (
             {"x": float(player["x"]), "y": float(player["y"])}
@@ -791,7 +1194,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     + int(item.get("sort_order") or 0)
                 )
                 if kind == "goal":
-                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
+                    end = semantic_goal_end(item, team_side, context)
                 elif kind == "corner":
                     start_x = float(start_point.get("x") or 50.0)
                     start_y = float(start_point.get("y") or 50.0)
@@ -801,20 +1204,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     end_x = 13.0 if start_x < 50.0 else 87.0
                     end = {"x": end_x, "y": box_y}
                 elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
-                    if kind == "shot_off_target":
-                        miss_offsets = (
-                            -(GOAL_HALF_WIDTH_PERCENT + 3.2),
-                            -(GOAL_HALF_WIDTH_PERCENT + 1.8),
-                            GOAL_HALF_WIDTH_PERCENT + 1.8,
-                            GOAL_HALF_WIDTH_PERCENT + 3.2,
-                        )
-                        end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
-                    elif kind == "shot_on_target":
-                        target_offsets = (-4.0, -2.0, 2.0, 4.0)
-                        end_y = 50.0 + target_offsets[seed % len(target_offsets)]
-                    else:
-                        end_y = 50.0
-                    end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
+                    end = semantic_shot_end(item, team_side, context, kind)
 
             normalized_path = (
                 {"start": start_point, "end": end if isinstance(end, dict) else None}
@@ -830,16 +1220,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             }
 
         if kind == "goal":
-            # Until provider ball coordinates are available, keep this deliberately
-            # simple and explicit: penalty spot -> attacking goal.
-            start = {
+            # When no event-attached coordinate exists, use commentary semantics
+            # (shot origin/goal side) before falling back to the penalty spot.
+            start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, PENALTY_SPOT_RIGHT_X, PENALTY_SPOT_LEFT_X),
                 "y": 50.0,
             }
-            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": 50.0}
+            end = semantic_goal_end(item, team_side, context)
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": player_anchor or start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": item.get("player_id"),
@@ -866,7 +1256,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             end = {"x": end_x, "y": box_y}
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": None,
@@ -874,36 +1264,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
         if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
             start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
-            start = {
+            start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, start_x, 100.0 - start_x),
                 "y": player_anchor["y"] if player_anchor else 50.0,
             }
-            if kind == "shot_off_target":
-                # Keep misses close to the goal rather than firing them toward
-                # a pitch corner. Vary the miss deterministically by event id /
-                # minute so multiple shots do not overlap at one point.
-                seed = (
-                    int(item.get("id") or 0)
-                    + int(item.get("minute") or 0)
-                    + int(item.get("sort_order") or 0)
-                )
-                miss_offsets = (
-                    -(GOAL_HALF_WIDTH_PERCENT + 3.2),
-                    -(GOAL_HALF_WIDTH_PERCENT + 1.8),
-                    GOAL_HALF_WIDTH_PERCENT + 1.8,
-                    GOAL_HALF_WIDTH_PERCENT + 3.2,
-                )
-                end_y = 50.0 + miss_offsets[seed % len(miss_offsets)]
-            elif kind == "shot_on_target":
-                seed = int(item.get("id") or item.get("minute") or 0)
-                target_offsets = (-4.0, -2.0, 2.0, 4.0)
-                end_y = 50.0 + target_offsets[seed % len(target_offsets)]
-            else:
-                end_y = 50.0
-            end = {"x": attacking_x(item, team_side, 100.0, 0.0), "y": end_y}
+            end = semantic_shot_end(item, team_side, context, kind)
             return {
                 "kind": kind,
-                "source": "inferred",
+                "source": "commentary_inferred" if context.get("commentary") else "inferred",
                 "anchor": start,
                 "ball_path": {"start": start, "end": end},
                 "highlight_player_id": None,
@@ -962,18 +1330,107 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             elif team_side == "away":
                 item["is_home"] = False
 
+            # Enrich the structured event with the closest play-by-play text.
+            # Event/subtype remains authoritative for scorer/assist identity;
+            # commentary adds body-part, shot-zone, assist-style and goal-target
+            # semantics that are not present in the basic event row.
+            matched_commentary = commentary_for_event(item, kind)
+            detail = dict(item.get("detail") or {})
+            if matched_commentary:
+                comment_text = str(matched_commentary.get("comment") or "")
+                comment_context = shot_context_from_comment(comment_text)
+                for key, value in comment_context.items():
+                    if key in {"body_part", "situation"}:
+                        detail.setdefault(key, value)
+                    else:
+                        detail[key] = value
+                item["commentary_id"] = matched_commentary.get("id")
+                item["commentary_text"] = comment_text
+            item["detail"] = detail
+
+            trend_context = trend_context_for_event(item)
+            if trend_context:
+                item["trend_context"] = trend_context
+
             spatial_data = spatial(item, kind)
             coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            shot_start_index = 0
+            if coordinate_track and kind == "goal":
+                coordinate_track, shot_start_index = extend_goal_track_with_assist(
+                    item,
+                    coordinate_track,
+                )
             if coordinate_track:
-                spatial_data["source"] = "stored"
+                spatial_data["source"] = (
+                    "stored_assist_goal"
+                    if kind == "goal" and shot_start_index > 0
+                    else "stored"
+                )
                 spatial_data["ball_track"] = coordinate_track
                 spatial_data["anchor"] = coordinate_track[0]
                 spatial_data["ball_path"] = {
                     "start": coordinate_track[0],
                     "end": coordinate_track[-1],
                 }
+                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                    coordinate_actor_anchor = coordinate_track[
+                        min(max(shot_start_index, 0), len(coordinate_track) - 1)
+                    ]
+                    semantic_actor_anchor = semantic_shot_start(
+                        item,
+                        team_side,
+                        detail,
+                    )
+                    # Player placement is not forced to the ball's terminal
+                    # coordinate. Commentary shot-origin evidence is preferred
+                    # when present because a selected provider segment can
+                    # legitimately end at/inside the goal.
+                    spatial_data["shot_actor_anchor"] = (
+                        semantic_actor_anchor or {
+                            "x": float(coordinate_actor_anchor["x"]),
+                            "y": float(coordinate_actor_anchor["y"]),
+                        }
+                    )
+                if kind == "goal":
+                    spatial_data["shot_start_index"] = shot_start_index
+                    if shot_start_index > 0:
+                        spatial_data["assist_actor_anchor"] = {
+                            "x": float(coordinate_track[0]["x"]),
+                            "y": float(coordinate_track[0]["y"]),
+                        }
+                    spatial_data["phases"] = (
+                        [
+                            {
+                                "kind": "assist",
+                                "start_index": 0,
+                                "end_index": shot_start_index,
+                            },
+                            {
+                                "kind": "shot",
+                                "start_index": shot_start_index,
+                                "end_index": len(coordinate_track) - 1,
+                            },
+                        ]
+                        if shot_start_index > 0
+                        else [
+                            {
+                                "kind": "shot",
+                                "start_index": 0,
+                                "end_index": len(coordinate_track) - 1,
+                            }
+                        ]
+                    )
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
+            if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
+                path_start = (
+                    spatial_data.get("ball_path", {}).get("start")
+                    if isinstance(spatial_data.get("ball_path"), dict)
+                    else None
+                )
+                if semantic_actor_anchor or isinstance(path_start, dict):
+                    spatial_data["shot_actor_anchor"] = semantic_actor_anchor or path_start
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
