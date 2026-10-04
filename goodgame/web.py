@@ -2103,6 +2103,133 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             matched["ball_path"] = matched_spatial["ball_path"]
             matched["spatial"] = matched_spatial
 
+    def same_occurrence(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return (
+            a.get("minute") == b.get("minute")
+            and a.get("extra_minute") == b.get("extra_minute")
+            and a.get("team_id") == b.get("team_id")
+        )
+
+    def spatial_points(event: dict[str, Any]) -> list[dict[str, Any]]:
+        spatial_data = event.get("spatial") or {}
+        track = [
+            dict(point)
+            for point in spatial_data.get("ball_track", []) or []
+            if isinstance(point, dict)
+        ]
+        if track:
+            return track
+        path = spatial_data.get("ball_path")
+        if not isinstance(path, dict):
+            return []
+        result: list[dict[str, Any]] = []
+        for point in (path.get("start"), path.get("end")):
+            if isinstance(point, dict) and point.get("x") is not None and point.get("y") is not None:
+                result.append({
+                    "x": float(point["x"]),
+                    "y": float(point["y"]),
+                    "timer": point.get("timer"),
+                    "period_id": point.get("period_id") or event.get("period_id"),
+                })
+        return result
+
+    # A goal may be represented by a Goal event plus a Corner/Shot row from
+    # the same minute. When the goal comment/facts say it followed a corner,
+    # fold that delivery into the Goal instead of showing "Corner" as the
+    # canonical event.
+    clustered_ids: set[str] = set()
+    provider_goals = [
+        event for event in merged
+        if (event.get("spatial") or {}).get("kind") == "goal"
+    ]
+    for goal in provider_goals:
+        detail = goal.get("detail") if isinstance(goal.get("detail"), dict) else {}
+        situation_text = " ".join([
+            str(detail.get("situation") or ""),
+            str(goal.get("commentary_text") or ""),
+        ]).casefold()
+        if "corner" not in situation_text:
+            continue
+
+        related_corners = [
+            event for event in merged
+            if event is not goal
+            and same_occurrence(goal, event)
+            and (event.get("spatial") or {}).get("kind") == "corner"
+        ]
+        if not related_corners:
+            continue
+
+        corner = max(
+            related_corners,
+            key=lambda event: len(spatial_points(event)),
+        )
+        clustered_ids.add(str(corner.get("id")))
+
+        goal_spatial = goal.get("spatial") or {}
+        corner_points = spatial_points(corner)
+        semantic_start = (
+            goal_spatial.get("shot_actor_anchor")
+            or semantic_shot_start(goal, side(goal), detail)
+        )
+        goal_end = semantic_goal_end(goal, side(goal), detail)
+
+        combined: list[dict[str, Any]] = list(corner_points)
+        if semantic_start is not None:
+            if not combined or (
+                (float(combined[-1]["x"]) - float(semantic_start["x"])) ** 2
+                + (float(combined[-1]["y"]) - float(semantic_start["y"])) ** 2
+            ) ** 0.5 > 1.5:
+                combined.append({
+                    "x": round(float(semantic_start["x"]), 3),
+                    "y": round(float(semantic_start["y"]), 3),
+                    "timer": None,
+                    "period_id": goal.get("period_id"),
+                })
+        shot_start_index = max(0, len(combined) - 1)
+
+        if not combined or (
+            (float(combined[-1]["x"]) - float(goal_end["x"])) ** 2
+            + (float(combined[-1]["y"]) - float(goal_end["y"])) ** 2
+        ) ** 0.5 > 1.0:
+            combined.append({
+                "x": round(float(goal_end["x"]), 3),
+                "y": round(float(goal_end["y"]), 3),
+                "timer": None,
+                "period_id": goal.get("period_id"),
+            })
+
+        if len(combined) >= 2:
+            goal_spatial["source"] = "clustered_corner_goal"
+            goal_spatial["ball_track"] = combined
+            goal_spatial["anchor"] = combined[0]
+            goal_spatial["ball_path"] = {
+                "start": combined[0],
+                "end": combined[-1],
+            }
+            goal_spatial["shot_start_index"] = shot_start_index
+            goal_spatial["phases"] = [
+                {
+                    "kind": "assist",
+                    "start_index": 0,
+                    "end_index": shot_start_index,
+                },
+                {
+                    "kind": "shot",
+                    "start_index": shot_start_index,
+                    "end_index": len(combined) - 1,
+                },
+            ]
+            goal["spatial"] = goal_spatial
+            goal["ball_track"] = combined
+            goal["ball_path"] = goal_spatial["ball_path"]
+
+    if clustered_ids:
+        merged = [
+            event for event in merged
+            if str(event.get("id")) not in clustered_ids
+        ]
+
     # Provider may expose the scored attempt as both a goal event and a
     # shot-on-target event. Keep the Goal as the canonical selectable event
     # when minute/team/scorer identify the same action.
