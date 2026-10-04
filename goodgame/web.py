@@ -686,21 +686,43 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if not selected:
                 return []
 
-            first_second = selected[0][1]
+            first_point, first_second = selected[0]
             target_is_left = target_goal_x < 50.0
-            same_end: list[tuple[dict[str, Any], int]] = []
-            for row in selected:
-                point, seconds = row
-                if seconds - first_second > 22:
+            same_end: list[tuple[dict[str, Any], int]] = [selected[0]]
+            previous_point = first_point
+            previous_second = first_second
+
+            for point, seconds in selected[1:]:
+                # A corner flight is short and continuous. Stop as soon as the
+                # provider stream jumps to a later possession phase.
+                if seconds - previous_second > 12 or seconds - first_second > 18:
                     break
+
                 point_x = float(point["x"])
-                if same_end:
-                    if target_is_left and point_x > 30.0:
-                        break
-                    if not target_is_left and point_x < 70.0:
-                        break
-                same_end.append(row)
-            selected = same_end
+                point_y = float(point["y"])
+                previous_x = float(previous_point["x"])
+                previous_y = float(previous_point["y"])
+
+                if target_is_left and point_x > 30.0:
+                    break
+                if not target_is_left and point_x < 70.0:
+                    break
+
+                step_distance = ((point_x - previous_x) ** 2 + (point_y - previous_y) ** 2) ** 0.5
+                if step_distance > 34.0:
+                    break
+
+                # The ball should leave the corner/touchline and enter the
+                # penalty-area side of the pitch, not hop between unrelated
+                # touchline samples.
+                if touchline_distance(point) + 2.0 < touchline_distance(previous_point):
+                    break
+
+                same_end.append((point, seconds))
+                previous_point = point
+                previous_second = seconds
+
+            selected = same_end if len(same_end) >= 2 else []
 
         elif kind in {"goal", "shot_on_target", "penalty"}:
             selected = build_approach_segment(
