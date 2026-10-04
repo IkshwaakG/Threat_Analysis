@@ -875,35 +875,60 @@ class BigQueryServingRepository:
                 ORDER BY ve.confidence DESC, ve.updated_at DESC
               ) = 1
             ),
-            season_standings AS (
+            season_standing_rows AS (
               SELECT
+                s.league_id,
+                s.season_id,
                 s.team_id,
-                t.name AS team_name,
-                t.image_path AS team_logo,
                 s.position,
                 s.points,
-                ARRAY(
-                  SELECT AS STRUCT
-                    SAFE_CAST(JSON_VALUE(detail, '$.type_id') AS INT64) AS type_id,
-                    ty.name,
-                    ty.developer_name,
-                    COALESCE(
-                      JSON_VALUE(detail, '$.value'),
-                      JSON_VALUE(detail, '$.value.total'),
-                      JSON_VALUE(detail, '$.value.count')
-                    ) AS value
-                  FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(s.details), [])) AS detail
-                  LEFT JOIN {self._table("types")} ty
-                    ON ty.type_id = SAFE_CAST(JSON_VALUE(detail, '$.type_id') AS INT64)
-                ) AS details
+                detail
               FROM {self._table("standings")} s
               CROSS JOIN fixture f
-              LEFT JOIN {self._table("teams")} t
-                ON t.team_id = s.team_id
-               AND t.league_id = s.league_id
-               AND t.season_id = s.season_id
+              LEFT JOIN UNNEST(IFNULL(JSON_QUERY_ARRAY(s.details), [])) AS detail
               WHERE s.league_id = f.league_id
                 AND s.season_id = f.season_id
+            ),
+            season_standing_details AS (
+              SELECT
+                sr.league_id,
+                sr.season_id,
+                sr.team_id,
+                sr.position,
+                sr.points,
+                SAFE_CAST(JSON_VALUE(sr.detail, '$.type_id') AS INT64) AS type_id,
+                ty.name,
+                ty.developer_name,
+                COALESCE(
+                  JSON_VALUE(sr.detail, '$.value'),
+                  JSON_VALUE(sr.detail, '$.value.total'),
+                  JSON_VALUE(sr.detail, '$.value.count')
+                ) AS value
+              FROM season_standing_rows sr
+              LEFT JOIN {self._table("types")} ty
+                ON ty.type_id = SAFE_CAST(JSON_VALUE(sr.detail, '$.type_id') AS INT64)
+            ),
+            season_standings AS (
+              SELECT
+                sr.team_id,
+                t.name AS team_name,
+                t.image_path AS team_logo,
+                ANY_VALUE(sr.position) AS position,
+                ANY_VALUE(sr.points) AS points,
+                ARRAY_AGG(
+                  IF(
+                    sr.type_id IS NULL AND sr.name IS NULL AND sr.developer_name IS NULL AND sr.value IS NULL,
+                    NULL,
+                    STRUCT(sr.type_id, sr.name, sr.developer_name, sr.value)
+                  )
+                  IGNORE NULLS
+                ) AS details
+              FROM season_standing_details sr
+              LEFT JOIN {self._table("teams")} t
+                ON t.team_id = sr.team_id
+               AND t.league_id = sr.league_id
+               AND t.season_id = sr.season_id
+              GROUP BY sr.team_id, t.name, t.image_path
             ),
             participants AS (
               SELECT
@@ -929,33 +954,41 @@ class BigQueryServingRepository:
               FROM {self._table("fixture_participants")}
               WHERE fixture_id = @fixture_id
             ),
-            h2h_fixtures AS (
+            h2h_candidates AS (
               SELECT
                 f.fixture_id,
                 f.league_id,
                 f.season_id,
                 f.starting_at,
                 f.result_info,
-                f.name
+                f.name,
+                COUNT(DISTINCT IF(
+                  fp.team_id IN (current_teams.home_team_id, current_teams.away_team_id),
+                  fp.team_id,
+                  NULL
+                )) AS matched_teams
               FROM {self._table("fixtures")} f
               CROSS JOIN current_team_ids current_teams
+              JOIN {self._table("fixture_participants")} fp
+                ON fp.fixture_id = f.fixture_id
+              CROSS JOIN fixture current_fixture
               WHERE f.fixture_id != @fixture_id
-                AND f.starting_at < (SELECT starting_at FROM fixture)
+                AND f.starting_at < current_fixture.starting_at
                 AND current_teams.home_team_id IS NOT NULL
                 AND current_teams.away_team_id IS NOT NULL
-                AND EXISTS (
-                  SELECT 1
-                  FROM {self._table("fixture_participants")} fp
-                  WHERE fp.fixture_id = f.fixture_id
-                    AND fp.team_id = current_teams.home_team_id
-                )
-                AND EXISTS (
-                  SELECT 1
-                  FROM {self._table("fixture_participants")} fp
-                  WHERE fp.fixture_id = f.fixture_id
-                    AND fp.team_id = current_teams.away_team_id
-                )
-              ORDER BY f.starting_at DESC
+              GROUP BY
+                f.fixture_id,
+                f.league_id,
+                f.season_id,
+                f.starting_at,
+                f.result_info,
+                f.name
+              HAVING matched_teams = 2
+            ),
+            h2h_fixtures AS (
+              SELECT *
+              FROM h2h_candidates
+              ORDER BY starting_at DESC
               LIMIT 10
             ),
             h2h_participants AS (
