@@ -897,6 +897,24 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         detail_context = item.get("detail") if isinstance(item.get("detail"), dict) else {}
         semantic_launch = semantic_shot_start(item, team_side, detail_context)
 
+        # period.minutes + period.seconds describe the period clock boundary.
+        # They are NOT the individual event second, but they let us reject ball
+        # samples that cannot belong to this period. counts_from gives the lower
+        # match-clock boundary when the provider exposes it (e.g. 45 for 2H).
+        try:
+            period_clock_ceiling = int(detail_context.get("period_elapsed_seconds"))
+        except (TypeError, ValueError):
+            period_clock_ceiling = None
+        try:
+            period_counts_from = int(detail_context.get("period_counts_from"))
+        except (TypeError, ValueError):
+            period_counts_from = None
+        period_clock_floor = (
+            period_counts_from * 60
+            if period_counts_from is not None
+            else None
+        )
+
         def provider_point(point: dict[str, Any]) -> dict[str, Any]:
             return {
                 "x": round(float(point["x"]), 3),
@@ -922,10 +940,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         same_period = [
             (point, seconds)
             for point, seconds in coordinate_stream
-            if event_period_id is None or point.get("period_id") == event_period_id
+            if (event_period_id is None or point.get("period_id") == event_period_id)
+            and (period_clock_floor is None or seconds >= period_clock_floor - 2)
+            and (period_clock_ceiling is None or seconds <= period_clock_ceiling + 2)
         ]
         if not same_period:
-            same_period = coordinate_stream
+            same_period = [
+                (point, seconds)
+                for point, seconds in coordinate_stream
+                if (period_clock_floor is None or seconds >= period_clock_floor - 2)
+                and (period_clock_ceiling is None or seconds <= period_clock_ceiling + 2)
+            ]
 
         # Search both plausible timer windows, with a small boundary pad.
         time_candidates = [
