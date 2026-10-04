@@ -1168,11 +1168,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         return result
 
-    def extend_goal_track_with_assist(
+    def extend_shot_track_with_assist(
         item: dict[str, Any],
         shot_track: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], int]:
-        """Prepend the most plausible stored assist pass to a goal shot track.
+        """Prepend the most plausible stored assist pass/cross to a shot track.
 
         The goal event minute does not carry an event second. The shot segment is
         first located from provider ball-coordinate timers. If the event has a
@@ -1224,7 +1224,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 (float(next_point["x"]) - float(point["x"])) ** 2
                 + (float(next_point["y"]) - float(point["y"])) ** 2
             ) ** 0.5
-            if step > 42.0:
+            # Final passes/crosses can span a large portion of the pitch.
+            # Time continuity + same-period constraints keep this from joining
+            # unrelated possessions.
+            if step > 62.0:
                 break
             selected_reversed.append((point, seconds))
             next_point = point
@@ -1571,7 +1574,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             shot_start_index = 0
 
             if coordinate_track and kind == "goal":
-                coordinate_track, shot_start_index = extend_goal_track_with_assist(
+                coordinate_track, shot_start_index = extend_shot_track_with_assist(
                     item,
                     coordinate_track,
                 )
@@ -1582,6 +1585,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     kind,
                     detail,
                 )
+                if shot_start_index == 0 and (
+                    item.get("related_player_id")
+                    or item.get("related_player_name")
+                    or detail.get("assist_type")
+                ):
+                    coordinate_track, shot_start_index = extend_shot_track_with_assist(
+                        item,
+                        coordinate_track,
+                    )
 
             if coordinate_track:
                 has_assist_phase = shot_start_index > 0
