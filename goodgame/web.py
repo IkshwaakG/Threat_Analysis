@@ -561,6 +561,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             if kind == "goal" and comment.get("is_goal") is not True:
                 continue
+            if kind != "goal" and comment.get("is_goal") is True:
+                # A scored action may also have a corner/shot row in the same
+                # minute. Keep the goal commentary for the Goal event and
+                # cluster the related rows later; do not relabel the corner.
+                continue
             text = str(comment.get("comment") or "")
             lower_text = text.casefold()
             score = 0
@@ -586,9 +591,6 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             if kind == "goal" and comment.get("is_goal") is not True:
                 score += 4
-            if kind != "goal" and comment.get("is_goal") is True:
-                score += 5
-
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
@@ -632,6 +634,29 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         for phrase, normalized_origin in origin_phrases:
             if phrase in lower:
                 context["shot_origin"] = normalized_origin
+                break
+
+        if "shot_origin" not in context:
+            if "tough angle on the left" in lower or "tight angle on the left" in lower:
+                context["shot_origin"] = "left side of the box"
+            elif "tough angle on the right" in lower or "tight angle on the right" in lower:
+                context["shot_origin"] = "right side of the box"
+
+        assist_origin_phrases = (
+            ("cross from the left", "left wing"),
+            ("cross from the right", "right wing"),
+            ("cross from the left wing", "left wing"),
+            ("cross from the right wing", "right wing"),
+            ("from the left wing", "left wing"),
+            ("from the right wing", "right wing"),
+            ("from the left flank", "left wing"),
+            ("from the right flank", "right wing"),
+            ("from the byline on the left", "left byline"),
+            ("from the byline on the right", "right byline"),
+        )
+        for phrase, assist_origin in assist_origin_phrases:
+            if phrase in lower:
+                context["assist_origin"] = assist_origin
                 break
 
         goal_targets = (
@@ -705,6 +730,73 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["situation"] = "Penalty"
 
         return context
+
+    def semantic_kind_from_comment(
+        original_kind: str,
+        matched_commentary: dict[str, Any] | None,
+        context: dict[str, Any],
+    ) -> str:
+        # Structured Goal is authoritative and can never be downgraded by text.
+        if original_kind == "goal":
+            return "goal"
+
+        text = str((matched_commentary or {}).get("comment") or "").casefold()
+        if matched_commentary and matched_commentary.get("is_goal") is True:
+            return "goal"
+        if text.startswith("goal!") or " goal! " in f" {text} ":
+            return "goal"
+
+        if original_kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            outcome = str(context.get("shot_outcome_hint") or "").casefold()
+            if outcome == "saved":
+                return "shot_on_target"
+            if outcome in {"left", "right", "high", "bar", "post"}:
+                return "shot_off_target"
+
+        return original_kind
+
+    def player_position_anchor(
+        item: dict[str, Any],
+        player_id: Any,
+    ) -> dict[str, float] | None:
+        if player_id is None:
+            return None
+        for position in item.get("player_positions", []) or []:
+            if not isinstance(position, dict):
+                continue
+            if str(position.get("player_id")) != str(player_id):
+                continue
+            try:
+                return {
+                    "x": float(position["x"]),
+                    "y": float(position["y"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                return None
+        return None
+
+    def semantic_assist_anchor(
+        item: dict[str, Any],
+        team_side: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, float] | None:
+        origin = str(context.get("assist_origin") or "").casefold()
+        if not origin:
+            return None
+
+        target_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = target_x > 50.0
+        x = 80.0 if attacks_right else 20.0
+        if "byline" in origin:
+            x = 94.0 if attacks_right else 6.0
+
+        if "left" in origin:
+            y = 15.0 if attacks_right else 85.0
+        elif "right" in origin:
+            y = 85.0 if attacks_right else 15.0
+        else:
+            y = 50.0
+        return {"x": x, "y": y}
 
     def trend_context_for_event(item: dict[str, Any]) -> list[dict[str, Any]]:
         try:
