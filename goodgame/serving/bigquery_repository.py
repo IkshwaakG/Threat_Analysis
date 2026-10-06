@@ -1933,6 +1933,21 @@ class BigQueryServingRepository:
                 AND s.season_id = @season_id
                 AND (@league_id IS NULL OR s.league_id = @league_id)
             ),
+            team_feature AS (
+              SELECT
+                matches,
+                minutes,
+                features,
+                feature_version,
+                updated_at
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'team'
+                AND entity_id = @team_id
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              ORDER BY updated_at DESC
+              LIMIT 1
+            ),
             team_players AS (
               SELECT
                 p.player_id,
@@ -2052,6 +2067,18 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'feature_profile' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                matches,
+                minutes,
+                features,
+                feature_version
+              )) AS payload
+            FROM team_feature
+
+            UNION ALL
+
+            SELECT
               'summary' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 matches_played,
@@ -2091,6 +2118,7 @@ class BigQueryServingRepository:
         players: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
         summary: dict[str, Any] = {}
+        feature_profile: dict[str, Any] | None = None
 
         for row in rows:
             kind = row["row_kind"]
@@ -2108,6 +2136,8 @@ class BigQueryServingRepository:
                 fixtures.append(data)
             elif kind == "summary":
                 summary = data
+            elif kind == "feature_profile":
+                feature_profile = data
 
         if team is None:
             raise LookupError(f"Team {team_id} not found for season {season_id}")
@@ -2147,6 +2177,7 @@ class BigQueryServingRepository:
             "stats": derived_stats + season_stats,
             "players": sorted(players, key=lambda player: str(player.get("name") or "")),
             "recent_fixtures": fixtures,
+            "feature_profile": feature_profile,
             "source": "bigquery",
         }
 
@@ -2184,6 +2215,23 @@ class BigQueryServingRepository:
               WHERE s.player_id = @player_id
                 AND s.season_id = @season_id
                 AND (@league_id IS NULL OR s.league_id = @league_id)
+            ),
+            player_feature AS (
+              SELECT
+                team_id,
+                position_id,
+                matches,
+                minutes,
+                features,
+                feature_version,
+                updated_at
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'player'
+                AND entity_id = @player_id
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              ORDER BY updated_at DESC
+              LIMIT 1
             ),
             player_teams AS (
               SELECT DISTINCT
@@ -2280,6 +2328,20 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'feature_profile' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                team_id,
+                position_id,
+                matches,
+                minutes,
+                features,
+                feature_version
+              )) AS payload
+            FROM player_feature
+
+            UNION ALL
+
+            SELECT
               'summary' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 appearances,
@@ -2328,6 +2390,7 @@ class BigQueryServingRepository:
         teams: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
         summary: dict[str, Any] = {}
+        feature_profile: dict[str, Any] | None = None
 
         for row in rows:
             kind = row["row_kind"]
@@ -2345,6 +2408,8 @@ class BigQueryServingRepository:
                 fixtures.append(data)
             elif kind == "summary":
                 summary = data
+            elif kind == "feature_profile":
+                feature_profile = data
 
         if player is None:
             raise LookupError(f"Player {player_id} not found for season {season_id}")
@@ -2384,5 +2449,6 @@ class BigQueryServingRepository:
             "stats": derived_stats + season_stats,
             "teams": teams,
             "recent_fixtures": fixtures,
+            "feature_profile": feature_profile,
             "source": "bigquery",
         }
