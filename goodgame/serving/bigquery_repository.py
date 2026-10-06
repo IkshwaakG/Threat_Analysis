@@ -2531,7 +2531,7 @@ class BigQueryServingRepository:
             candidate_scores AS (
               SELECT
                 n.entity_id,
-                ANY_VALUE(n.team_id IGNORE NULLS) AS team_id,
+                MAX(n.team_id) AS team_id,
                 COUNT(*) AS shared_metrics,
                 SAFE_DIVIDE(
                   SUM(t.z * n.z),
