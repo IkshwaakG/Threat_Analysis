@@ -200,10 +200,134 @@ class FakeServingRepository:
     def get_player_view(self, player_id, season_id, league_id=None):
         return {"player": {"id": player_id}, "stats": [], "teams": [], "recent_fixtures": []}
 
+    def get_similar_players(self, player_id, season_id, league_id=None, limit=6):
+        return [
+            {
+                "player_id": 11,
+                "name": "Similar Player",
+                "team_id": 2,
+                "team_name": "Arsenal",
+                "shared_metrics": 12,
+                "similarity": 0.91,
+            }
+        ][:limit]
+
+    def get_similar_teams(self, team_id, season_id, league_id=None, limit=6):
+        return [
+            {
+                "team_id": 2,
+                "name": "Arsenal",
+                "shared_metrics": 15,
+                "similarity": 0.88,
+            }
+        ][:limit]
+
 
 class GoodGameWebTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def test_video_cv_replaces_geometry_but_not_event_semantics(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Shooter",
+                    "team_id": 1,
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 9001,
+                    "minute": 13,
+                    "type": "Goal",
+                    "text": "Goal",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Shooter",
+                    "is_home": True,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [],
+            "ball_coordinates": [],
+            "video_events": [],
+            "video_cv_tracks": [
+                {
+                    "match_event_id": 9001,
+                    "frame_index": 1,
+                    "video_time_seconds": 15.0,
+                    "object_kind": "ball",
+                    "x": 78.0,
+                    "y": 49.0,
+                    "confidence": 0.80,
+                },
+                {
+                    "match_event_id": 9001,
+                    "frame_index": 2,
+                    "video_time_seconds": 15.1,
+                    "object_kind": "ball",
+                    "x": 89.0,
+                    "y": 50.0,
+                    "confidence": 0.84,
+                },
+                {
+                    "match_event_id": 9001,
+                    "frame_index": 3,
+                    "video_time_seconds": 15.2,
+                    "object_kind": "ball",
+                    "x": 98.0,
+                    "y": 51.0,
+                    "confidence": 0.88,
+                },
+                {
+                    "match_event_id": 9001,
+                    "frame_index": 1,
+                    "video_time_seconds": 15.0,
+                    "object_kind": "person",
+                    "track_id": 17,
+                    "player_id": 10,
+                    "team_id": 1,
+                    "x": 78.5,
+                    "y": 48.8,
+                    "confidence": 0.91,
+                },
+            ],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 9001)
+
+        self.assertEqual(event["display_type"], "Goal")
+        self.assertEqual(event["spatial"]["kind"], "goal")
+        self.assertEqual(event["spatial"]["source"], "video_cv")
+        self.assertEqual(len(event["spatial"]["ball_track"]), 3)
+        self.assertEqual(event["spatial"]["ball_track"][0]["x"], 78.0)
+        self.assertEqual(event["spatial"]["ball_track"][-1]["x"], 98.0)
+        self.assertEqual(event["spatial"]["shot_actor_anchor"], {"x": 78.5, "y": 48.8})
+        self.assertGreater(event["spatial"]["cv_confidence"], 0.8)
+
+    def test_similarity_endpoints_use_serving_repository(self):
+        with patch("goodgame.web._SERVING_REPOSITORY", FakeServingRepository()):
+            player_response = self.client.get(
+                "/api/players/10/similar?season_id=318&competition_id=8"
+            )
+            team_response = self.client.get(
+                "/api/teams/1/similar?season_id=318&competition_id=8"
+            )
+
+        self.assertEqual(player_response.status_code, 200)
+        self.assertEqual(player_response.json()[0]["player_id"], 11)
+        self.assertEqual(team_response.status_code, 200)
+        self.assertEqual(team_response.json()[0]["team_id"], 2)
 
     def test_selectable_events_support_both_video_event_shapes(self):
         game = {
