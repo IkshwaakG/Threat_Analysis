@@ -2673,6 +2673,150 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         cleaned.append(event)
     merged = cleaned
 
+    # CV is a geometry source, never an event-semantics source. The event id
+    # is established by provider/timeline/commentary first; video tracks can
+    # then replace its spatial path when the synchronized event has sufficient
+    # visual evidence.
+    cv_by_event: dict[str, list[dict[str, Any]]] = {}
+    for sample in game.get("video_cv_tracks", []) or []:
+        if not isinstance(sample, dict) or sample.get("match_event_id") is None:
+            continue
+        cv_by_event.setdefault(str(sample["match_event_id"]), []).append(sample)
+
+    for event in merged:
+        event_id = event.get("id")
+        if event_id is None:
+            continue
+        samples = cv_by_event.get(str(event_id), [])
+        if not samples:
+            continue
+
+        ball_samples = [
+            sample for sample in samples
+            if str(sample.get("object_kind") or "").casefold() == "ball"
+            and sample.get("x") is not None
+            and sample.get("y") is not None
+            and float(sample.get("confidence") or 0.0) >= 0.20
+        ]
+        ball_samples.sort(
+            key=lambda sample: (
+                float(sample.get("video_time_seconds") or 0.0),
+                int(sample.get("frame_index") or 0),
+            )
+        )
+
+        player_samples: dict[int, list[dict[str, Any]]] = {}
+        for sample in samples:
+            if str(sample.get("object_kind") or "").casefold() != "person":
+                continue
+            if sample.get("player_id") is None:
+                continue
+            if sample.get("x") is None or sample.get("y") is None:
+                continue
+            try:
+                player_id = int(sample["player_id"])
+            except (TypeError, ValueError):
+                continue
+            player_samples.setdefault(player_id, []).append(sample)
+
+        for track in player_samples.values():
+            track.sort(key=lambda sample: float(sample.get("video_time_seconds") or 0.0))
+
+        if len(ball_samples) >= 2:
+            track = [
+                {
+                    "x": round(float(sample["x"]), 3),
+                    "y": round(float(sample["y"]), 3),
+                    "timer": round(float(sample.get("video_time_seconds") or 0.0), 3),
+                    "period_id": event.get("period_id"),
+                }
+                for sample in ball_samples
+            ]
+            spatial = dict(event.get("spatial") or {})
+            spatial.update({
+                "source": "video_cv",
+                "ball_track": track,
+                "anchor": track[0],
+                "ball_path": {"start": track[0], "end": track[-1]},
+                "cv_confidence": round(
+                    sum(float(sample.get("confidence") or 0.0) for sample in ball_samples)
+                    / len(ball_samples),
+                    4,
+                ),
+            })
+
+            shooter_id = event.get("player_id")
+            if shooter_id is not None:
+                try:
+                    shooter_track = player_samples.get(int(shooter_id), [])
+                except (TypeError, ValueError):
+                    shooter_track = []
+                if shooter_track:
+                    sample = shooter_track[-1]
+                    spatial["shot_actor_anchor"] = {
+                        "x": round(float(sample["x"]), 3),
+                        "y": round(float(sample["y"]), 3),
+                    }
+
+            assist_id = event.get("related_player_id")
+            if assist_id is not None:
+                try:
+                    assist_track = player_samples.get(int(assist_id), [])
+                except (TypeError, ValueError):
+                    assist_track = []
+                if assist_track:
+                    sample = assist_track[0]
+                    spatial["assist_actor_anchor"] = {
+                        "x": round(float(sample["x"]), 3),
+                        "y": round(float(sample["y"]), 3),
+                    }
+
+            if player_samples:
+                spatial["cv_player_tracks"] = [
+                    {
+                        "player_id": player_id,
+                        "team_id": track_rows[0].get("team_id") if track_rows else None,
+                        "points": [
+                            {
+                                "x": round(float(sample["x"]), 3),
+                                "y": round(float(sample["y"]), 3),
+                                "video_time_seconds": round(
+                                    float(sample.get("video_time_seconds") or 0.0),
+                                    3,
+                                ),
+                                "confidence": sample.get("confidence"),
+                            }
+                            for sample in track_rows
+                        ],
+                    }
+                    for player_id, track_rows in sorted(player_samples.items())
+                ]
+
+                event["player_positions"] = [
+                    {
+                        "player_id": player_id,
+                        "player_name": player_name_for_id(player_id),
+                        "team": (
+                            "home"
+                            if track_rows[-1].get("team_id") is not None
+                            and home_team_id is not None
+                            and int(track_rows[-1]["team_id"]) == int(home_team_id)
+                            else "away"
+                            if track_rows[-1].get("team_id") is not None
+                            and away_team_id is not None
+                            and int(track_rows[-1]["team_id"]) == int(away_team_id)
+                            else None
+                        ),
+                        "x": round(float(track_rows[-1]["x"]), 3),
+                        "y": round(float(track_rows[-1]["y"]), 3),
+                    }
+                    for player_id, track_rows in sorted(player_samples.items())
+                ]
+
+            event["spatial"] = spatial
+            event["ball_track"] = track
+            event["ball_path"] = spatial["ball_path"]
+
     merged.sort(
         key=lambda item: (
             item.get("minute") if item.get("minute") is not None else 999,
@@ -3015,6 +3159,44 @@ def player_view(
             player_id=player_id,
             season_id=season_id,
             league_id=competition_id,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise _service_error(error) from error
+
+
+@app.get("/api/players/{player_id}/similar")
+def similar_players(
+    player_id: int,
+    season_id: int = Query(gt=0),
+    competition_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=6, ge=1, le=12),
+) -> list[dict[str, Any]]:
+    _positive(player_id, "player_id")
+    try:
+        return _repository().get_similar_players(
+            player_id=player_id,
+            season_id=season_id,
+            league_id=competition_id,
+            limit=limit,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise _service_error(error) from error
+
+
+@app.get("/api/teams/{team_id}/similar")
+def similar_teams(
+    team_id: int,
+    season_id: int = Query(gt=0),
+    competition_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=6, ge=1, le=12),
+) -> list[dict[str, Any]]:
+    _positive(team_id, "team_id")
+    try:
+        return _repository().get_similar_teams(
+            team_id=team_id,
+            season_id=season_id,
+            league_id=competition_id,
+            limit=limit,
         )
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
         raise _service_error(error) from error
