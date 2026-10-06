@@ -3164,6 +3164,44 @@ def player_view(
         raise _service_error(error) from error
 
 
+@app.get("/api/players/{player_id}/similar")
+def similar_players(
+    player_id: int,
+    season_id: int = Query(gt=0),
+    competition_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=6, ge=1, le=12),
+) -> list[dict[str, Any]]:
+    _positive(player_id, "player_id")
+    try:
+        return _repository().get_similar_players(
+            player_id=player_id,
+            season_id=season_id,
+            league_id=competition_id,
+            limit=limit,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise _service_error(error) from error
+
+
+@app.get("/api/teams/{team_id}/similar")
+def similar_teams(
+    team_id: int,
+    season_id: int = Query(gt=0),
+    competition_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=6, ge=1, le=12),
+) -> list[dict[str, Any]]:
+    _positive(team_id, "team_id")
+    try:
+        return _repository().get_similar_teams(
+            team_id=team_id,
+            season_id=season_id,
+            league_id=competition_id,
+            limit=limit,
+        )
+    except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
+        raise _service_error(error) from error
+
+
 # Backward-compatible aliases now use the same serving repository instead of
 # bypassing DATA_MODE or issuing nested provider queries.
 @app.get("/api/games/{fixture_id}/dashboard")
