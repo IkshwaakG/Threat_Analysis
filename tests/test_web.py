@@ -316,7 +316,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertGreater(event["spatial"]["cv_confidence"], 0.8)
 
     def test_similarity_endpoints_use_serving_repository(self):
-        with patch("goodgame.web._SERVING_REPOSITORY", FakeServingRepository()):
+        with patch("goodgame.web._repository", return_value=FakeServingRepository()):
             player_response = self.client.get(
                 "/api/players/10/similar?season_id=318&competition_id=8"
             )
