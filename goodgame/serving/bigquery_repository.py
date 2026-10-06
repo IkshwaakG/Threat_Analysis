@@ -925,6 +925,35 @@ class BigQueryServingRepository:
                 ORDER BY ve.confidence DESC, ve.updated_at DESC
               ) = 1
             ),
+            fixture_cv_run AS (
+              SELECT r.*
+              FROM {self._table("fixture_video_cv_runs")} r
+              JOIN fixture_video fv ON fv.video_id = r.video_id
+              WHERE r.fixture_id = @fixture_id
+                AND r.status = 'completed'
+              ORDER BY r.updated_at DESC
+              LIMIT 1
+            ),
+            fixture_cv_tracks AS (
+              SELECT
+                t.cv_run_id,
+                t.match_event_id,
+                t.frame_index,
+                t.video_time_seconds,
+                t.object_kind,
+                t.track_id,
+                t.player_id,
+                t.team_id,
+                t.x,
+                t.y,
+                t.confidence,
+                t.identity_confidence
+              FROM {self._table("fixture_video_cv_tracks")} t
+              JOIN fixture_cv_run r USING (cv_run_id)
+              WHERE t.fixture_id = @fixture_id
+                AND t.x IS NOT NULL
+                AND t.y IS NOT NULL
+            ),
             season_standing_rows AS (
               SELECT
                 s.league_id,
@@ -1516,6 +1545,13 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'video_cv_track' AS row_kind,
+              TO_JSON_STRING(t) AS payload
+            FROM fixture_cv_tracks t
+
+            UNION ALL
+
+            SELECT
               'ball_coordinate' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 b.coordinate_id AS id,
@@ -1592,6 +1628,7 @@ class BigQueryServingRepository:
         advanced: dict[str, Any] = {}
         video_reference: dict[str, Any] | None = None
         video_events: list[dict[str, Any]] = []
+        video_cv_tracks: list[dict[str, Any]] = []
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
         normalized_match_facts: list[dict[str, Any]] = []
@@ -1677,6 +1714,8 @@ class BigQueryServingRepository:
                 video_reference = data
             elif kind == "video_event":
                 video_events.append(data)
+            elif kind == "video_cv_track":
+                video_cv_tracks.append(data)
             elif kind == "ball_coordinate":
                 ball_coordinates.append(data)
             elif kind == "standing":
@@ -1817,6 +1856,14 @@ class BigQueryServingRepository:
             )
         )
 
+        video_cv_tracks.sort(
+            key=lambda item: (
+                item.get("match_event_id") if item.get("match_event_id") is not None else 999999999,
+                item.get("video_time_seconds") if item.get("video_time_seconds") is not None else 999999999,
+                item.get("frame_index") if item.get("frame_index") is not None else 999999999,
+            )
+        )
+
         head_to_head.sort(
             key=lambda item: str(item.get("starting_at") or ""),
             reverse=True,
@@ -1845,6 +1892,7 @@ class BigQueryServingRepository:
             "ai_overviews": advanced.get("ai_overviews") or [],
             "video_reference": video_reference,
             "video_events": video_events,
+            "video_cv_tracks": video_cv_tracks,
             "standings": standings,
             "head_to_head": head_to_head,
             "source": "bigquery",
