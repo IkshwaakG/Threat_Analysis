@@ -22,8 +22,12 @@ class ServingArchitectureTests(unittest.TestCase):
         self.assertIn('"match_facts": normalized_match_facts or advanced.get("match_facts") or []', serving)
         self.assertIn('self._table("fixture_videos")', serving)
         self.assertIn('self._table("fixture_video_events")', serving)
+        self.assertIn('self._table("fixture_video_cv_runs")', serving)
+        self.assertIn('self._table("fixture_video_cv_tracks")', serving)
+        self.assertIn('self._table("entity_feature_mart")', serving)
         self.assertIn('"video_reference": video_reference', serving)
         self.assertIn('"video_events": video_events', serving)
+        self.assertIn('"video_cv_tracks": video_cv_tracks', serving)
         self.assertIn('self._table("fixture_participants")', serving)
         self.assertIn('"head_to_head": head_to_head', serving)
         self.assertNotIn(

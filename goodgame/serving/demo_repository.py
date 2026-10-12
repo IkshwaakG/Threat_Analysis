@@ -136,3 +136,22 @@ class DemoServingRepository:
         if value is None:
             raise LookupError(f"Player {player_id} is not packaged in the demo snapshot")
         return value
+
+    def get_similar_players(
+        self,
+        player_id: int,
+        season_id: int,
+        league_id: int | None = None,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    def get_similar_teams(
+        self,
+        team_id: int,
+        season_id: int,
+        league_id: int | None = None,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        return []
+

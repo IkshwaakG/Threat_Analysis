@@ -925,6 +925,35 @@ class BigQueryServingRepository:
                 ORDER BY ve.confidence DESC, ve.updated_at DESC
               ) = 1
             ),
+            fixture_cv_run AS (
+              SELECT r.*
+              FROM {self._table("fixture_video_cv_runs")} r
+              JOIN fixture_video fv ON fv.video_id = r.video_id
+              WHERE r.fixture_id = @fixture_id
+                AND r.status = 'completed'
+              ORDER BY r.updated_at DESC
+              LIMIT 1
+            ),
+            fixture_cv_tracks AS (
+              SELECT
+                t.cv_run_id,
+                t.match_event_id,
+                t.frame_index,
+                t.video_time_seconds,
+                t.object_kind,
+                t.track_id,
+                t.player_id,
+                t.team_id,
+                t.x,
+                t.y,
+                t.confidence,
+                t.identity_confidence
+              FROM {self._table("fixture_video_cv_tracks")} t
+              JOIN fixture_cv_run r USING (cv_run_id)
+              WHERE t.fixture_id = @fixture_id
+                AND t.x IS NOT NULL
+                AND t.y IS NOT NULL
+            ),
             season_standing_rows AS (
               SELECT
                 s.league_id,
@@ -1516,6 +1545,13 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'video_cv_track' AS row_kind,
+              TO_JSON_STRING(t) AS payload
+            FROM fixture_cv_tracks t
+
+            UNION ALL
+
+            SELECT
               'ball_coordinate' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 b.coordinate_id AS id,
@@ -1592,6 +1628,7 @@ class BigQueryServingRepository:
         advanced: dict[str, Any] = {}
         video_reference: dict[str, Any] | None = None
         video_events: list[dict[str, Any]] = []
+        video_cv_tracks: list[dict[str, Any]] = []
         ball_coordinates: list[dict[str, Any]] = []
         standings: list[dict[str, Any]] = []
         normalized_match_facts: list[dict[str, Any]] = []
@@ -1677,6 +1714,8 @@ class BigQueryServingRepository:
                 video_reference = data
             elif kind == "video_event":
                 video_events.append(data)
+            elif kind == "video_cv_track":
+                video_cv_tracks.append(data)
             elif kind == "ball_coordinate":
                 ball_coordinates.append(data)
             elif kind == "standing":
@@ -1817,6 +1856,14 @@ class BigQueryServingRepository:
             )
         )
 
+        video_cv_tracks.sort(
+            key=lambda item: (
+                item.get("match_event_id") if item.get("match_event_id") is not None else 999999999,
+                item.get("video_time_seconds") if item.get("video_time_seconds") is not None else 999999999,
+                item.get("frame_index") if item.get("frame_index") is not None else 999999999,
+            )
+        )
+
         head_to_head.sort(
             key=lambda item: str(item.get("starting_at") or ""),
             reverse=True,
@@ -1845,6 +1892,7 @@ class BigQueryServingRepository:
             "ai_overviews": advanced.get("ai_overviews") or [],
             "video_reference": video_reference,
             "video_events": video_events,
+            "video_cv_tracks": video_cv_tracks,
             "standings": standings,
             "head_to_head": head_to_head,
             "source": "bigquery",
@@ -1884,6 +1932,21 @@ class BigQueryServingRepository:
               WHERE s.team_id = @team_id
                 AND s.season_id = @season_id
                 AND (@league_id IS NULL OR s.league_id = @league_id)
+            ),
+            team_feature AS (
+              SELECT
+                matches,
+                minutes,
+                features,
+                feature_version,
+                updated_at
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'team'
+                AND entity_id = @team_id
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              ORDER BY updated_at DESC
+              LIMIT 1
             ),
             team_players AS (
               SELECT
@@ -2004,6 +2067,18 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'feature_profile' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                matches,
+                minutes,
+                features,
+                feature_version
+              )) AS payload
+            FROM team_feature
+
+            UNION ALL
+
+            SELECT
               'summary' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 matches_played,
@@ -2043,6 +2118,7 @@ class BigQueryServingRepository:
         players: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
         summary: dict[str, Any] = {}
+        feature_profile: dict[str, Any] | None = None
 
         for row in rows:
             kind = row["row_kind"]
@@ -2060,6 +2136,8 @@ class BigQueryServingRepository:
                 fixtures.append(data)
             elif kind == "summary":
                 summary = data
+            elif kind == "feature_profile":
+                feature_profile = data
 
         if team is None:
             raise LookupError(f"Team {team_id} not found for season {season_id}")
@@ -2099,6 +2177,7 @@ class BigQueryServingRepository:
             "stats": derived_stats + season_stats,
             "players": sorted(players, key=lambda player: str(player.get("name") or "")),
             "recent_fixtures": fixtures,
+            "feature_profile": feature_profile,
             "source": "bigquery",
         }
 
@@ -2136,6 +2215,23 @@ class BigQueryServingRepository:
               WHERE s.player_id = @player_id
                 AND s.season_id = @season_id
                 AND (@league_id IS NULL OR s.league_id = @league_id)
+            ),
+            player_feature AS (
+              SELECT
+                team_id,
+                position_id,
+                matches,
+                minutes,
+                features,
+                feature_version,
+                updated_at
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'player'
+                AND entity_id = @player_id
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              ORDER BY updated_at DESC
+              LIMIT 1
             ),
             player_teams AS (
               SELECT DISTINCT
@@ -2232,6 +2328,20 @@ class BigQueryServingRepository:
             UNION ALL
 
             SELECT
+              'feature_profile' AS row_kind,
+              TO_JSON_STRING(STRUCT(
+                team_id,
+                position_id,
+                matches,
+                minutes,
+                features,
+                feature_version
+              )) AS payload
+            FROM player_feature
+
+            UNION ALL
+
+            SELECT
               'summary' AS row_kind,
               TO_JSON_STRING(STRUCT(
                 appearances,
@@ -2280,6 +2390,7 @@ class BigQueryServingRepository:
         teams: list[dict[str, Any]] = []
         fixtures: list[dict[str, Any]] = []
         summary: dict[str, Any] = {}
+        feature_profile: dict[str, Any] | None = None
 
         for row in rows:
             kind = row["row_kind"]
@@ -2297,6 +2408,8 @@ class BigQueryServingRepository:
                 fixtures.append(data)
             elif kind == "summary":
                 summary = data
+            elif kind == "feature_profile":
+                feature_profile = data
 
         if player is None:
             raise LookupError(f"Player {player_id} not found for season {season_id}")
@@ -2336,5 +2449,252 @@ class BigQueryServingRepository:
             "stats": derived_stats + season_stats,
             "teams": teams,
             "recent_fixtures": fixtures,
+            "feature_profile": feature_profile,
             "source": "bigquery",
         }
+    def get_similar_players(
+        self,
+        player_id: int,
+        season_id: int,
+        league_id: int | None = None,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        """Return role-aware player similarity from standardized feature vectors."""
+
+        rows = self._query(
+            f"""
+            WITH target AS (
+              SELECT position_id
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'player'
+                AND entity_id = @player_id
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              ORDER BY updated_at DESC
+              LIMIT 1
+            ),
+            eligible AS (
+              SELECT
+                m.entity_id,
+                m.team_id,
+                m.position_id,
+                m.features
+              FROM {self._table("entity_feature_mart")} m
+              CROSS JOIN target t
+              WHERE m.entity_type = 'player'
+                AND m.season_id = @season_id
+                AND (@league_id IS NULL OR m.league_id = @league_id)
+                AND (
+                  t.position_id IS NULL
+                  OR m.position_id IS NULL
+                  OR m.position_id = t.position_id
+                )
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY m.entity_id
+                ORDER BY m.updated_at DESC
+              ) = 1
+            ),
+            raw_vectors AS (
+              SELECT
+                e.entity_id,
+                e.team_id,
+                SAFE_CAST(JSON_VALUE(metric, '$.type_id') AS INT64) AS type_id,
+                SAFE_CAST(JSON_VALUE(metric, '$.avg_value') AS FLOAT64) AS value
+              FROM eligible e,
+              UNNEST(IFNULL(JSON_QUERY_ARRAY(e.features), [])) metric
+              WHERE SAFE_CAST(JSON_VALUE(metric, '$.avg_value') AS FLOAT64) IS NOT NULL
+            ),
+            metric_distribution AS (
+              SELECT
+                type_id,
+                AVG(value) AS mean_value,
+                STDDEV_POP(value) AS std_value
+              FROM raw_vectors
+              GROUP BY type_id
+              HAVING COUNT(DISTINCT entity_id) >= 3
+            ),
+            normalized AS (
+              SELECT
+                v.entity_id,
+                v.team_id,
+                v.type_id,
+                SAFE_DIVIDE(v.value - d.mean_value, NULLIF(d.std_value, 0)) AS z
+              FROM raw_vectors v
+              JOIN metric_distribution d USING (type_id)
+            ),
+            target_vector AS (
+              SELECT type_id, z
+              FROM normalized
+              WHERE entity_id = @player_id
+                AND z IS NOT NULL
+            ),
+            candidate_scores AS (
+              SELECT
+                n.entity_id,
+                MAX(n.team_id) AS team_id,
+                COUNT(*) AS shared_metrics,
+                SAFE_DIVIDE(
+                  SUM(t.z * n.z),
+                  SQRT(SUM(t.z * t.z) * SUM(n.z * n.z))
+                ) AS similarity
+              FROM normalized n
+              JOIN target_vector t USING (type_id)
+              WHERE n.entity_id != @player_id
+                AND n.z IS NOT NULL
+              GROUP BY n.entity_id
+              HAVING shared_metrics >= 4
+            ),
+            player_names AS (
+              SELECT
+                player_id,
+                COALESCE(display_name, name, common_name) AS name,
+                image_path AS image,
+                position_id
+              FROM {self._table("players")}
+              WHERE season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY player_id
+                ORDER BY updated_at DESC
+              ) = 1
+            ),
+            team_names AS (
+              SELECT team_id, name
+              FROM {self._table("teams")}
+              WHERE season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY team_id
+                ORDER BY updated_at DESC
+              ) = 1
+            )
+            SELECT
+              score.entity_id AS player_id,
+              p.name,
+              p.image,
+              p.position_id,
+              score.team_id,
+              team.name AS team_name,
+              score.shared_metrics,
+              score.similarity
+            FROM candidate_scores score
+            LEFT JOIN player_names p ON p.player_id = score.entity_id
+            LEFT JOIN team_names team ON team.team_id = score.team_id
+            WHERE score.similarity IS NOT NULL
+            ORDER BY score.similarity DESC, score.shared_metrics DESC, p.name
+            LIMIT @limit
+            """,
+            [
+                bigquery.ScalarQueryParameter("player_id", "INT64", player_id),
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("league_id", "INT64", league_id),
+                bigquery.ScalarQueryParameter("limit", "INT64", max(1, min(limit, 12))),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+
+    def get_similar_teams(
+        self,
+        team_id: int,
+        season_id: int,
+        league_id: int | None = None,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        """Return team-style similarity from standardized feature vectors."""
+
+        rows = self._query(
+            f"""
+            WITH eligible AS (
+              SELECT entity_id, features
+              FROM {self._table("entity_feature_mart")}
+              WHERE entity_type = 'team'
+                AND season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY entity_id
+                ORDER BY updated_at DESC
+              ) = 1
+            ),
+            raw_vectors AS (
+              SELECT
+                e.entity_id,
+                SAFE_CAST(JSON_VALUE(metric, '$.type_id') AS INT64) AS type_id,
+                SAFE_CAST(JSON_VALUE(metric, '$.avg_value') AS FLOAT64) AS value
+              FROM eligible e,
+              UNNEST(IFNULL(JSON_QUERY_ARRAY(e.features), [])) metric
+              WHERE SAFE_CAST(JSON_VALUE(metric, '$.avg_value') AS FLOAT64) IS NOT NULL
+            ),
+            metric_distribution AS (
+              SELECT
+                type_id,
+                AVG(value) AS mean_value,
+                STDDEV_POP(value) AS std_value
+              FROM raw_vectors
+              GROUP BY type_id
+              HAVING COUNT(DISTINCT entity_id) >= 3
+            ),
+            normalized AS (
+              SELECT
+                v.entity_id,
+                v.type_id,
+                SAFE_DIVIDE(v.value - d.mean_value, NULLIF(d.std_value, 0)) AS z
+              FROM raw_vectors v
+              JOIN metric_distribution d USING (type_id)
+            ),
+            target_vector AS (
+              SELECT type_id, z
+              FROM normalized
+              WHERE entity_id = @team_id
+                AND z IS NOT NULL
+            ),
+            scores AS (
+              SELECT
+                n.entity_id,
+                COUNT(*) AS shared_metrics,
+                SAFE_DIVIDE(
+                  SUM(t.z * n.z),
+                  SQRT(SUM(t.z * t.z) * SUM(n.z * n.z))
+                ) AS similarity
+              FROM normalized n
+              JOIN target_vector t USING (type_id)
+              WHERE n.entity_id != @team_id
+                AND n.z IS NOT NULL
+              GROUP BY n.entity_id
+              HAVING shared_metrics >= 4
+            ),
+            team_names AS (
+              SELECT
+                team_id,
+                name,
+                short_code,
+                image_path AS logo
+              FROM {self._table("teams")}
+              WHERE season_id = @season_id
+                AND (@league_id IS NULL OR league_id = @league_id)
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY team_id
+                ORDER BY updated_at DESC
+              ) = 1
+            )
+            SELECT
+              score.entity_id AS team_id,
+              team.name,
+              team.short_code,
+              team.logo,
+              score.shared_metrics,
+              score.similarity
+            FROM scores score
+            LEFT JOIN team_names team ON team.team_id = score.entity_id
+            WHERE score.similarity IS NOT NULL
+            ORDER BY score.similarity DESC, score.shared_metrics DESC, team.name
+            LIMIT @limit
+            """,
+            [
+                bigquery.ScalarQueryParameter("team_id", "INT64", team_id),
+                bigquery.ScalarQueryParameter("season_id", "INT64", season_id),
+                bigquery.ScalarQueryParameter("league_id", "INT64", league_id),
+                bigquery.ScalarQueryParameter("limit", "INT64", max(1, min(limit, 12))),
+            ],
+        )
+        return [dict(row.items()) for row in rows]
+

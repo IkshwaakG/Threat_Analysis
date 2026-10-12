@@ -426,3 +426,41 @@ Ball coordinates come from the normalized
 and expected lineups come from `football_core.fixture_advanced`.
 
 The web service never calls Sportmonks and never reads `football_raw`.
+
+## CV-backed spatial serving and intelligence
+
+The serving application remains database-only. Video processing and model
+feature construction happen in `football_xT_ETL`.
+
+When available, `GET /api/games/{fixture_id}` includes the latest completed
+event-scoped CV samples from:
+
+```text
+football_core.fixture_video_cv_runs
+football_core.fixture_video_cv_tracks
+```
+
+Canonical event semantics are built first. CV may then replace only the spatial
+geometry for the same `match_event_id`.
+
+Spatial source values include:
+
+```text
+video_cv               measured event-window video geometry
+semantic_fused         semantic reconstruction refined by stored coordinates
+semantic_reconstructed semantic/fixture fallback without trusted track geometry
+```
+
+The same core-only contract now exposes model-ready feature profiles on Player
+and Team dashboards when `football_core.entity_feature_mart` has been built.
+
+Similarity endpoints:
+
+```text
+GET /api/players/{player_id}/similar?season_id=...&competition_id=...
+GET /api/teams/{team_id}/similar?season_id=...&competition_id=...
+```
+
+Similarity is computed from standardized feature vectors with a minimum shared
+metric count. Player similarity is position-aware when position information is
+available.
