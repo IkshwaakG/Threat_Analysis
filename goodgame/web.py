@@ -2706,12 +2706,24 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         )
 
         player_samples: dict[int, list[dict[str, Any]]] = {}
+        visual_tracks: dict[str, list[dict[str, Any]]] = {}
         for sample in samples:
             if str(sample.get("object_kind") or "").casefold() != "person":
                 continue
-            if sample.get("player_id") is None:
-                continue
             if sample.get("x") is None or sample.get("y") is None:
+                continue
+
+            track_key = (
+                f"track:{sample.get('track_id')}"
+                if sample.get("track_id") is not None
+                else f"player:{sample.get('player_id')}"
+                if sample.get("player_id") is not None
+                else None
+            )
+            if track_key is not None:
+                visual_tracks.setdefault(track_key, []).append(sample)
+
+            if sample.get("player_id") is None:
                 continue
             try:
                 player_id = int(sample["player_id"])
@@ -2720,6 +2732,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             player_samples.setdefault(player_id, []).append(sample)
 
         for track in player_samples.values():
+            track.sort(key=lambda sample: float(sample.get("video_time_seconds") or 0.0))
+        for track in visual_tracks.values():
             track.sort(key=lambda sample: float(sample.get("video_time_seconds") or 0.0))
 
         if len(ball_samples) >= 2:
@@ -2771,10 +2785,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         "y": round(float(sample["y"]), 3),
                     }
 
-            if player_samples:
+            if visual_tracks:
                 spatial["cv_player_tracks"] = [
                     {
-                        "player_id": player_id,
+                        "track_id": track_rows[0].get("track_id") if track_rows else None,
+                        "player_id": track_rows[0].get("player_id") if track_rows else None,
                         "team_id": track_rows[0].get("team_id") if track_rows else None,
                         "points": [
                             {
@@ -2789,9 +2804,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                             for sample in track_rows
                         ],
                     }
-                    for player_id, track_rows in sorted(player_samples.items())
+                    for _, track_rows in sorted(visual_tracks.items())
                 ]
 
+            if player_samples:
                 event["player_positions"] = [
                     {
                         "player_id": player_id,
