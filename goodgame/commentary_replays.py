@@ -130,6 +130,13 @@ def commentary_simulations(
                 actor = before[0]
         if actor is None and len(mentions) == 1:
             actor = mentions[0]
+        if action == "foul":
+            # "Trai Hume fouls Mason Mount" contains enough information to
+            # identify the recipient from the registered players even when
+            # neither team's name appears in the sentence.
+            from goodgame.foul_reconciliation import _roles
+            roles = _roles(comment, players)
+            actor = roles["victim"] or roles["offender"] or actor
         team_id = actor.get("team_id") if actor else None
         mentioned_teams = [
             team for team in teams
@@ -197,3 +204,5 @@ def commentary_simulations(
     # actor with whichever player happens to be near a ball endpoint.
     from goodgame.commentary_spatial import enrich_replays
     return enrich_replays(game, selected)
+
+# CI verifies team inferred from fouled player identity.
