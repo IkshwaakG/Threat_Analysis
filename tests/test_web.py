@@ -274,25 +274,15 @@ class GoodGameWebTests(unittest.TestCase):
             ],
         }
         events = _selectable_events(game)
-        woodwork = next(event for event in events if event["id"] == 157072715)
-        self.assertEqual(woodwork["spatial"]["kind"], "woodwork")
-        self.assertEqual(woodwork["display_type"], "Woodwork")
-        self.assertEqual(woodwork["spatial"]["source"], "illustrative_reconstruction")
-        self.assertEqual(woodwork["spatial"]["contact_location"], "unknown")
-        self.assertEqual(woodwork["spatial"]["woodwork_contact"], {
-            "kind": "crossbar", "index": 1, "source": "illustrative",
-        })
-        track = woodwork["spatial"]["ball_track"]
-        self.assertEqual(len(track), 4)
-        self.assertLess(track[0]["x"], track[1]["x"])
-        self.assertLess(track[2]["x"], track[1]["x"])
-        self.assertLess(track[3]["x"], track[2]["x"])
-        self.assertEqual(woodwork["spatial"]["ball_path"]["end"], track[-1])
-        self.assertIn("Illustrative", woodwork["spatial"]["reconstruction_note"])
-        self.assertIsNone(woodwork.get("commentary_id"))
-        shot = next(event for event in events if event["id"] == 151643202)
+        self.assertEqual(len(events), 1)
+        shot = events[0]
+        self.assertEqual(shot["id"], 151643202)
         self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
         self.assertEqual(shot.get("commentary_id"), 9556084)
+        self.assertEqual(shot["detail"]["secondary_flags"], ["woodwork"])
+        self.assertEqual(shot["detail"]["woodwork_stat_ids"], [157072715])
+        self.assertNotEqual(shot["spatial"]["source"], "illustrative_reconstruction")
+        self.assertLess(shot["spatial"]["ball_path"]["end"]["x"], 100.0)
 
     def test_woodwork_replay_mirrors_direction_in_second_half(self):
         game = {
