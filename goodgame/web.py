@@ -588,6 +588,98 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
+    def defensive_actor_from_comment(
+        item: dict[str, Any], comment: str, outcome: str,
+    ) -> dict[str, Any] | None:
+        """Find an explicitly named saver/blocker on the opposing team.
+
+        Never promote the shooter or an assister to defensive actor, and do
+        not guess a name from a keeper's lineup position alone.
+        """
+        attacker_side = side(item)
+        if attacker_side not in {"home", "away"}:
+            return None
+        defender_side = "away" if attacker_side == "home" else "home"
+        phrase = " ".join(str(comment or "").casefold().split())
+        verbs = (
+            r"\b(?:sav(?:e|es|ed|ing)|den(?:y|ies|ied)|stopp?ed|"
+            r"parr(?:y|ies|ied))\b"
+            if outcome == "save"
+            else r"\b(?:block(?:s|ed|ing)?|deflect(?:s|ed|ing)?)\b"
+        )
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for player in game.get("players", []) or []:
+            if not isinstance(player, dict):
+                continue
+            if player.get("team_location") != defender_side:
+                continue
+            name = " ".join(str(player.get("name") or "").casefold().split())
+            if not name:
+                continue
+            for mention in re.finditer(r"\b" + re.escape(name) + r"\b", phrase):
+                prefix = phrase[max(0, mention.start() - 120):mention.start()]
+                suffix = phrase[mention.end():mention.end() + 90]
+                # "saved in the top corner by Robin Roefs"
+                by_actor = (
+                    re.search(r"\bby\s+$", prefix)
+                    and re.search(verbs, prefix[: -len("by ")] or prefix)
+                )
+                # "Robin Roefs from Sunderland makes a great save"
+                actor_verb = re.search(
+                    (r"\b(?:makes?.{0,35}save|denies|stops|parries)\b"
+                     if outcome == "save"
+                     else r"\b(?:blocks?|deflects?|makes?.{0,35}block)\b"),
+                    suffix,
+                )
+                if by_actor:
+                    candidates.append((0, player))
+                elif actor_verb:
+                    candidates.append((1, player))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: entry[0])
+        return candidates[0][1]
+
+    def defensive_actor_spatial(
+        item: dict[str, Any],
+        spatial_data: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        hint = str(context.get("shot_outcome_hint") or "").casefold()
+        if hint not in {"saved", "blocked"}:
+            return
+        outcome = "save" if hint == "saved" else "block"
+        spatial_data["outcome_kind"] = outcome
+        spatial_data.pop("outcome_marker", None)
+
+        defender = defensive_actor_from_comment(
+            item, str(item.get("commentary_text") or ""), outcome
+        )
+        if defender is None:
+            return  # Unknown actor: keep only the result label, never an icon.
+        actor_id = defender.get("player_id")
+        point = player_position_anchor(item, actor_id)
+        anchor_source = "event_player_positions" if point else None
+        if point is None:
+            path = spatial_data.get("ball_path")
+            end = path.get("end") if isinstance(path, dict) else None
+            if isinstance(end, dict) and end.get("x") is not None and end.get("y") is not None:
+                point = {"x": float(end["x"]), "y": float(end["y"])}
+                anchor_source = "inferred_contact_point"
+        if point is None:
+            point = semantic_shot_end(item, side(item), context, str(spatial_data.get("kind") or "shot"))
+            anchor_source = "inferred_contact_point"
+
+        role = _visual_role(defender.get("position_id"))
+        spatial_data.update({
+            "outcome_actor_id": actor_id,
+            "outcome_actor_name": str(defender.get("name") or "").strip(),
+            "outcome_actor_role": role,
+            "outcome_actor_team": defender.get("team_location"),
+            "outcome_actor_anchor": point,
+            "outcome_actor_anchor_source": anchor_source,
+        })
+
     def commentary_action_kind(comment: dict[str, Any]) -> str:
         text = str(comment.get("comment") or "").casefold()
         if comment.get("is_goal") is True or text.startswith("goal!") or " scores " in f" {text} ":
@@ -2279,6 +2371,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item.pop("ball_track", None)
                     item["ball_path"] = spatial_data.get("ball_path")
 
+            if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+                defensive_actor_spatial(item, spatial_data, detail)
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
