@@ -46,14 +46,27 @@ def _zone(text: str, target: float, *, default_distance: float = 20.0
           ) -> dict[str, float] | None:
     """Attacker-oriented zones from COMMENTARY, never from a ball endpoint."""
     lower = text.casefold()
-    if "six-yard" in lower or "6-yard" in lower or "very close range" in lower:
-        distance = 6.5
-    elif any(p in lower for p in ("outside the box", "outside the penalty area",
-                                 "edge of the box", "outside penalty area")):
-        distance = 25.0
-    elif any(p in lower for p in ("penalty area", "inside the box", "inside the area",
-                                 "center of the box", "centre of the box")):
-        distance = 15.0
+    # Pitch X is normalized to 0..100 across 105 metres. The penalty area
+    # is the OUTER 16.5m-deep box; the smaller box is the 5.5m goal area.
+    # Commentary describing close-range headers must stay inside the box,
+    # never use a lineup/midfield position just because no coordinate exists.
+    if any(p in lower for p in (
+        "six-yard", "6-yard", "six yard", "goal area",
+        "close-range", "close range", "very close range", "point-blank",
+    )):
+        distance = 7.5  # ~7.9m from goal, near the six-yard area
+    elif any(p in lower for p in (
+        "outside the box", "outside the penalty area",
+        "outside penalty area", "outside the area",
+    )):
+        distance = 24.0
+    elif any(p in lower for p in ("edge of the box", "edge of the penalty area")):
+        distance = 16.4  # Outside the large penalty area line
+    elif any(p in lower for p in (
+        "penalty area", "inside the box", "inside the area",
+        "center of the box", "centre of the box",
+    )):
+        distance = 12.0  # Inside the large 16.5m penalty area
     elif "midfield" in lower or "halfway line" in lower:
         distance = 50.0
     elif any(p in lower for p in ("wing", "flank", "byline")):
@@ -187,6 +200,79 @@ def enrich_replays(
         detail = dict(event.get("detail") or {})
         story = list(detail.get("event_sequence") or [])
         tracking_count = 0
+
+        if kind == "foul":
+            # Fouls do not represent a ball traversal. A player can only be
+            # shown at an actual time-matched ball sample, never a guessed
+            # formation position or a random point on a synthetic path.
+            # The provider does not identify who possessed the ball at each
+            # timestamp, so this placement is contextual, not measured player
+            # tracking. Choose the fouled player when commentary says who won
+            # the free kick; otherwise use a single named participant.
+            first_sample = samples[0] if samples else None
+            event_clock = max(0, _clock(event) * 60)
+            explicit_samples = [
+                row for row in (game.get("ball_coordinates") or [])
+                if isinstance(row, dict)
+                and isinstance(row.get("timer"), str)
+                and re.fullmatch(r"\d{1,3}:\d{2}", row["timer"])
+                and event_clock <= (
+                    int(row["timer"].split(":")[0]) * 60
+                    + int(row["timer"].split(":")[1])
+                ) < event_clock + 60
+                and (
+                    event.get("period_id") is None
+                    or row.get("period_id") is None
+                    or str(row["period_id"]) == str(event["period_id"])
+                )
+            ]
+            if not explicit_samples:
+                first_sample = None
+            elif first_sample is not None:
+                # Use earliest sample in this actual minute (instead of the
+                # 20-second support period preceding it).
+                minute_points = _support_samples(
+                    {**game, "ball_coordinates": explicit_samples}, event,
+                )
+                first_sample = minute_points[0] if minute_points else None
+
+            actor = None
+            if first_sample:
+                text_lower = narrative.casefold()
+                if any(word in text_lower for word in ("earned a free kick", "wins a free kick",
+                                                        "won a free kick", "draws a foul",
+                                                        "fouled by", "is fouled")):
+                    actor = next((p for p in mentions
+                                  if str(p["name"]).casefold() in text_lower), None)
+                elif re.search(r"\bfouls?\b", text_lower) and len(mentions) >= 2:
+                    actor = mentions[1]  # the fouled opponent, not the fouler
+                elif len(mentions) == 1:
+                    actor = mentions[0]
+                if actor and actor.get("player_id") is not None:
+                    actors.append(_actor(actor, "fouled_player", first_sample,
+                                         "minute_ball_sample_context_not_player_tracking"))
+            spatial.update({
+                "kind": "foul",
+                "source": "foul_position_only",
+                "anchor": None,
+                "ball_path": None,
+                "ball_track": [],
+                "actor_positions": actors,
+                "actor_placement_policy": "commentary_first",
+                "coordinate_support_points": len(explicit_samples),
+                "reconstruction_note": (
+                    "Foul: no ball flight. Player shown only at a time-matched "
+                    "ball location; ball coordinates are not measured player positions."
+                    if actors else
+                    "Foul: no ball flight or player position displayed because "
+                    "the provider did not identify a time-matched ball location."
+                ),
+            })
+            event["ball_track"] = []
+            event["ball_path"] = None
+            event["spatial"] = spatial
+            event["detail"] = detail
+            continue
 
         def place(player: dict[str, Any] | None, role: str,
                   anchor: dict[str, float] | None, *, evidence: str) -> dict[str, float] | None:
@@ -418,7 +504,7 @@ def enrich_replays(
                      "evidence": "inferred_from_corner"},
                 ]
 
-        elif kind in {"offside", "foul"}:
+        elif kind == "offside":
             # Comments may name passers, receivers, foulers and victims even
             # though no event-specific player_positions were stored.
             # Anchor them to described broad zones, not ball path endpoints.
