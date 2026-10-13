@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import threading
@@ -266,6 +267,41 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_ball_coordinates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Sportmonks unit-space ball samples to the API's 0..100 pitch.
+
+    Sportmonks can supply x/y as fractions, including minor float overshoot
+    such as -0.00999999. Decide the scale once per fixture, not per sample,
+    so near-corner positions on an already normalized pitch stay intact.
+    """
+    samples: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            x, y = float(row["x"]), float(row["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        samples.append({**row, "x": x, "y": y})
+
+    unit_space = (
+        len(samples) >= 4
+        and all(-0.05 <= p[axis] <= 1.05 for p in samples for axis in ("x", "y"))
+        and any(p[axis] >= 0.20 for p in samples for axis in ("x", "y"))
+    )
+    scale = 100.0 if unit_space else 1.0
+    return [
+        {
+            **point,
+            "x": round(max(0.0, min(100.0, point["x"] * scale)), 3),
+            "y": round(max(0.0, min(100.0, point["y"] * scale)), 3),
+        }
+        for point in samples
+    ]
+
+
 def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     """Merge provider events + timeline into one selectable spatial event list."""
     visual_players = _visual_players(game)
@@ -285,8 +321,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
         if "substitution" in value:
             return "substitution"
-        if "goal" in value:
+        # "goalkeeper" is not a goal, and WOODWORK is not a scored attempt.
+        if re.search(r"\bgoal\b", value):
             return "goal"
+        if "woodwork" in value or "crossbar" in value or "goalpost" in value:
+            return "woodwork"
         if "yellow" in value or "red" in value or "card" in value:
             return "card"
         if "corner" in value:
@@ -395,13 +434,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         # Unknown ownership stays central instead of inventing direction.
         return 50.0
 
-    ball_coordinates = [
-        point
-        for point in game.get("ball_coordinates", []) or []
-        if isinstance(point, dict)
-        and point.get("x") is not None
-        and point.get("y") is not None
-    ]
+    ball_coordinates = _normalize_ball_coordinates(
+        game.get("ball_coordinates", []) or []
+    )
 
     def timer_seconds(value: Any) -> int | None:
         """Provider timer is match time in MM:SS."""
@@ -620,7 +655,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             action_kind = commentary_action_kind(comment)
             minute_delta = abs(comment_minute - minute)
-            if kind == "corner":
+            if kind == "woodwork":
+                # A separately reported woodwork milestone is NOT the same
+                # attempt as a saved shot in that minute. Only attach text
+                # explicitly describing a contact with the goal frame.
+                if comment_minute != minute or not any(
+                    phrase in str(comment.get("comment") or "").casefold()
+                    for phrase in (
+                        "woodwork", "hits the bar", "hits the post",
+                        "hit the post", "hit the bar", "off the crossbar",
+                        "off the post", "strikes the post", "strikes the bar",
+                    )
+                ):
+                    continue
+            elif kind == "corner":
                 # Corner timeline rows are occasionally one display minute after
                 # the commentary. Allow that small offset, but only for a true
                 # corner-award comment. Never attach "shot ... after a corner".
@@ -829,8 +877,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         context: dict[str, Any],
     ) -> str:
         # Structured Goal is authoritative and can never be downgraded by text.
-        if original_kind == "goal":
-            return "goal"
+        if original_kind in {"goal", "woodwork"}:
+            return original_kind
 
         text = str((matched_commentary or {}).get("comment") or "").casefold()
         if matched_commentary and matched_commentary.get("is_goal") is True:
@@ -1839,6 +1887,31 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             {"x": float(player["x"]), "y": float(player["y"])}
             if player is not None else None
         )
+        if kind == "woodwork":
+            # Aggregate WOODWORK timelines can identify the shooter without
+            # indicating which post/bar was contacted or any shot coordinates.
+            # Never invent a precise impact point or turn it into a goal.
+            launch = (
+                semantic_shot_start(item, team_side, context)
+                or player_position_anchor(item, item.get("player_id"))
+                or fixture_role_anchor(item, item.get("player_id"), "shooter")
+            )
+            target_x = attacking_x(item, team_side, 100.0, 0.0)
+            marker = {
+                "kind": "woodwork",
+                "x": target_x,
+                "y": 50.0,
+                "label": "Goal frame (impact location unknown)",
+            }
+            return {
+                "kind": "woodwork",
+                "source": "outcome_only",
+                "anchor": launch,
+                "ball_path": None,
+                "highlight_player_id": item.get("player_id"),
+                "shot_actor_anchor": launch,
+                "outcome_marker": marker,
+            }
         stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
         source = "stored" if stored_path else "inferred"
 
@@ -2238,6 +2311,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["display_type"] = "Shot Off Target"
             elif kind == "shot":
                 item["display_type"] = "Shot"
+            elif kind == "woodwork":
+                item["display_type"] = "Woodwork"
             elif kind == "corner":
                 item["display_type"] = "Corner"
             else:
