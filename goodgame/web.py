@@ -1021,7 +1021,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             context["situation"] = "Corner"
         elif "direct free kick" in lower:
             context["situation"] = "Direct free kick"
-        elif "penalty" in lower:
+        elif re.search(r"\\bpenalty\\s+(?:kick|spot|taken|awarded|scored)\\b", lower):
             context["situation"] = "Penalty"
 
         return context
@@ -2316,11 +2316,23 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if kind == "substitution":
                 continue
 
+            # Minute/team/type alone is NOT an attempt identifier: two
+            # shots by the same team can occur in the same minute. Only
+            # suppress repeated copies of an identical provider row here.
+            row_id = item.get("id")
             dedupe_key = (
-                item.get("minute"),
-                item.get("extra_minute"),
-                kind,
-                item.get("team_id"),
+                (source_kind, str(row_id))
+                if row_id is not None
+                else (
+                    source_kind,
+                    item.get("minute"),
+                    item.get("extra_minute"),
+                    kind,
+                    item.get("team_id"),
+                    item.get("player_id"),
+                    item.get("text"),
+                    item.get("sort_order"),
+                )
             )
             if dedupe_key in seen:
                 continue
@@ -2959,6 +2971,82 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if id(event) not in duplicate_object_ids
         ]
 
+    # Woodwork can be an aggregate statistic for a shot already represented
+    # by a commentary-backed attempt. An unannotated Woodwork milestone
+    # must not create an extra selectable event when the SAME shooter,
+    # team, period and minute identify exactly one corresponding shot.
+    # Never merge a separately described frame strike, a different actor,
+    # or an ambiguous choice between two possible attempts.
+    redundant_woodwork_ids: set[int] = set()
+    for woodwork in merged:
+        if semantic_event_kind(woodwork) != "woodwork":
+            continue
+        if woodwork.get("commentary_id") is not None:
+            continue
+
+        woodwork_actor = woodwork.get("player_id")
+        woodwork_name = str(woodwork.get("player") or "").strip().casefold()
+        if woodwork_actor is None and not woodwork_name:
+            continue
+
+        candidates: list[dict[str, Any]] = []
+        for attempt in merged:
+            if semantic_event_kind(attempt) not in {
+                "shot", "shot_on_target", "shot_off_target", "blocked_shot", "penalty",
+            }:
+                continue
+            if attempt.get("commentary_id") is None:
+                continue
+            if attempt.get("team_id") != woodwork.get("team_id"):
+                continue
+            if attempt.get("minute") != woodwork.get("minute"):
+                continue
+            if attempt.get("extra_minute") != woodwork.get("extra_minute"):
+                continue
+            if (
+                attempt.get("period_id") is not None
+                and woodwork.get("period_id") is not None
+                and attempt.get("period_id") != woodwork.get("period_id")
+            ):
+                continue
+            attempt_actor = attempt.get("player_id")
+            attempt_name = str(attempt.get("player") or "").strip().casefold()
+            actor_matches = (
+                str(attempt_actor) == str(woodwork_actor)
+                if attempt_actor is not None and woodwork_actor is not None
+                else bool(woodwork_name and attempt_name and woodwork_name == attempt_name)
+            )
+            if actor_matches:
+                candidates.append(attempt)
+
+        if len(candidates) != 1:
+            continue
+        attempt = candidates[0]
+        detail = dict(attempt.get("detail") or {})
+        flags = list(detail.get("secondary_flags") or [])
+        if "woodwork" not in flags:
+            flags.append("woodwork")
+        detail["secondary_flags"] = flags
+        ids = list(detail.get("woodwork_stat_ids") or [])
+        if woodwork.get("id") is not None and woodwork["id"] not in ids:
+            ids.append(woodwork["id"])
+        detail["woodwork_stat_ids"] = ids
+        detail["outcome_evidence_note"] = (
+            "Woodwork was reported as a statistic on this attempt; "
+            "the exact frame contact is unverified."
+        )
+        attempt["detail"] = detail
+        # Keep the attempt's actual primary outcome (saved/blocked/missed)
+        # and its existing trajectory. Never add an invented post/crossbar
+        # bounce to a save merely because of an aggregate Woodwork statistic.
+        redundant_woodwork_ids.add(id(woodwork))
+
+    if redundant_woodwork_ids:
+        merged = [
+            event for event in merged
+            if id(event) not in redundant_woodwork_ids
+        ]
+
     # Corners/free-kicks are setup context when a following attempt explicitly
     # says it came from that restart. Keep the shot/goal as the selectable
     # event and its detail.situation as the cause; do not render a second,
@@ -3242,6 +3330,70 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             event["spatial"] = spatial
             event["ball_track"] = track
             event["ball_path"] = spatial["ball_path"]
+
+    # Every selectable event needs a visible pitch movement. Prefer real
+    # ball tracks and semantic action paths above; for non-ball events such
+    # as cards or fouls, show a clearly disclosed contextual reconstruction
+    # rather than claiming the card itself has a measured ball flight.
+    for event in merged:
+        spatial_data = dict(event.get("spatial") or {})
+        track = list(spatial_data.get("ball_track") or event.get("ball_track") or [])
+        path = spatial_data.get("ball_path") or event.get("ball_path")
+        if len(track) >= 2:
+            continue
+        if isinstance(path, dict):
+            path_start, path_end = path.get("start"), path.get("end")
+            if (
+                isinstance(path_start, dict)
+                and isinstance(path_end, dict)
+                and path_start.get("x") is not None
+                and path_start.get("y") is not None
+                and path_end.get("x") is not None
+                and path_end.get("y") is not None
+                and (
+                    abs(float(path_start["x"]) - float(path_end["x"])) > 0.05
+                    or abs(float(path_start["y"]) - float(path_end["y"])) > 0.05
+                )
+            ):
+                spatial_data["ball_track"] = [path_start, path_end]
+                event["spatial"] = spatial_data
+                event["ball_track"] = [path_start, path_end]
+                continue
+
+        anchor = spatial_data.get("anchor")
+        if not isinstance(anchor, dict) or anchor.get("x") is None or anchor.get("y") is None:
+            player_id = event.get("player_id")
+            positioned = players_by_id.get(int(player_id)) if player_id is not None and str(player_id).isdigit() else None
+            if positioned is not None:
+                anchor = {"x": positioned["x"], "y": positioned["y"]}
+        team_side = side(event)
+        target = attacking_x(event, team_side, 82.0, 18.0)
+        direction = 1.0 if target > 50.0 else -1.0
+        if not isinstance(anchor, dict) or anchor.get("x") is None or anchor.get("y") is None:
+            anchor = {"x": target, "y": 50.0}
+        end = {
+            "x": round(max(2.0, min(98.0, float(anchor["x"]))), 3),
+            "y": round(max(2.0, min(98.0, float(anchor["y"]))), 3),
+        }
+        step = 12.0 if semantic_event_kind(event) == "offside" else 6.0
+        start = {
+            "x": round(max(2.0, min(98.0, end["x"] - direction * step)), 3),
+            "y": round(max(2.0, min(98.0, end["y"] + (3.0 if end["y"] < 50.0 else -3.0))), 3),
+        }
+        spatial_data.update({
+            "source": "context_inferred",
+            "anchor": start,
+            "ball_path": {"start": start, "end": end},
+            "ball_track": [start, end],
+            "shot_start_index": 0,
+            "reconstruction_note": (
+                "Illustrative contextual movement; no measured ball trajectory "
+                "is available for this event."
+            ),
+        })
+        event["spatial"] = spatial_data
+        event["ball_path"] = spatial_data["ball_path"]
+        event["ball_track"] = spatial_data["ball_track"]
 
     merged.sort(
         key=lambda item: (
