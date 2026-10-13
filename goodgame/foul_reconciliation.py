@@ -100,12 +100,20 @@ def _same_incident(a: dict[str, Any], b: dict[str, Any],
         return False
     if oa and ob and str(oa.get("player_id")) != str(ob.get("player_id")):
         return False
-    # Player pair is explicitly shared between complementary descriptions.
-    if va and vb and str(va.get("player_id")) == str(vb.get("player_id")):
+    # Same victim alone is not enough: a player can win two free kicks
+    # in the same minute. Require complementary narratives or an identical
+    # explicitly reported offender+victim pair.
+    same_victim = bool(va and vb and str(va.get("player_id")) == str(vb.get("player_id")))
+    same_offender = bool(oa and ob and str(oa.get("player_id")) == str(ob.get("player_id")))
+    if same_victim and same_offender:
         return True
-    if oa and ob and str(oa.get("player_id")) == str(ob.get("player_id")):
-        return True
-    if ra["mentions"] & rb["mentions"] and (ra["committed"] != rb["committed"] or ra["won"] != rb["won"]):
+    complementary = bool(
+        (ra["committed"] and rb["won"]) or
+        (rb["committed"] and ra["won"])
+    )
+    if not complementary:
+        return False
+    if same_victim or same_offender or ra["mentions"] & rb["mentions"]:
         return True
     # One narrative says "X commits a foul" and the adjacent opposing-side
     # line says "Y wins a free kick". This is a weaker, but testable, link.
