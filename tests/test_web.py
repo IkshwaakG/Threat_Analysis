@@ -1050,6 +1050,8 @@ class GoodGameWebTests(unittest.TestCase):
                 {"id": 8005, "minute": 45, "team_id": 3,
                  "player_id": 12, "type": "Penalty Cancelled",
                  "text": "Penalty disallowed"},
+                {"id": 8006, "minute": 45, "team_id": 3,
+                 "type": "Corner", "text": "Corner"},
             ],
             "commentary": [
                 {"id": 9103, "minute": 45, "extra_minute": 7,
@@ -1068,9 +1070,12 @@ class GoodGameWebTests(unittest.TestCase):
             "ball_coordinates": [],
         }
         events = _selectable_events(game)
-        self.assertEqual(len(events), 2)
+        self.assertEqual([e["id"] for e in events], [8004, 8005, 8006])
         shot = next(e for e in events if e["id"] == 8004)
         decision = next(e for e in events if e["id"] == 8005)
+        corner = next(e for e in events if e["id"] == 8006)
+        self.assertEqual(decision["detail"]["follow_up_corner_event_id"], 8006)
+        self.assertEqual(corner["detail"]["preceded_by_penalty_decision_event_id"], 8005)
         self.assertEqual(shot.get("commentary_id"), 9100)
         self.assertNotIn("ordered_commentary_steps", shot["detail"])
         steps = decision["detail"]["ordered_commentary_steps"]
