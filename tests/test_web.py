@@ -666,8 +666,11 @@ class GoodGameWebTests(unittest.TestCase):
         events = _selectable_events(game)
         minute_events = [event for event in events if event.get("minute") == 13]
 
-        self.assertEqual(len(minute_events), 1)
-        goal = minute_events[0]
+        self.assertEqual(len(minute_events), 2)
+        goal = next(e for e in minute_events if e["spatial"]["kind"] == "goal")
+        corner = next(e for e in minute_events if e["spatial"]["kind"] == "corner")
+        self.assertEqual(corner["detail"]["follow_up_shot_event_id"], goal["id"])
+        self.assertEqual(goal["detail"]["preceded_by_corner_event_id"], corner["id"])
         self.assertEqual(goal["spatial"]["kind"], "goal")
         self.assertEqual(goal["display_type"], "Goal")
         self.assertEqual(goal["player"], "Riccardo Calafiori")
@@ -956,9 +959,9 @@ class GoodGameWebTests(unittest.TestCase):
         event = _selectable_events(game)[0]
         self.assertNotEqual((event["detail"] or {}).get("situation"), "Penalty")
 
-    def test_penalty_cancellation_is_context_on_bruno_blocked_shot(self):
-        # A referee decision may be assigned to an opposing defender's team
-        # while the shot itself belongs to the attacking team.
+    def test_distinct_same_minute_attack_var_corner_and_header(self):
+        # Four real football actions share minute 45 and must not collapse.
+        # The cancelled penalty is a separate challenge, not a block by Hume.
         game = {
             "home_team": {"id": 14, "name": "Manchester United"},
             "away_team": {"id": 3, "name": "Sunderland"},
@@ -969,6 +972,12 @@ class GoodGameWebTests(unittest.TestCase):
                  "team_location": "home", "position_id": 26},
                 {"player_id": 24816771, "name": "Trai Hume", "team_id": 3,
                  "team_location": "away", "position_id": 25},
+                {"player_id": 24818280, "name": "Benjamin Sesko", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 12433171, "name": "Dan Ballard", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+                {"player_id": 1887, "name": "Granit Xhaka", "team_id": 3,
+                 "team_location": "away", "position_id": 26},
             ],
             "events": [],
             "timeline": [
@@ -978,51 +987,62 @@ class GoodGameWebTests(unittest.TestCase):
                 {"id": 452, "minute": 45, "period_id": 711, "team_id": 3,
                  "player_id": 24816771, "type": "Penalty Cancelled",
                  "text": "Penalty disallowed", "sort_order": 2},
+                {"id": 456, "minute": 45, "period_id": 711, "team_id": 3,
+                 "type": "Corner", "text": "Corner", "sort_order": 3},
+                {"id": 458, "minute": 45, "period_id": 711, "team_id": 3,
+                 "player_id": 12433171, "type": "Shot Off Target",
+                 "text": "Shot Off Target", "sort_order": 4},
             ],
             "commentary": [
-                {"id": 453, "minute": 45, "sort_order": 3,
+                {"id": 453, "minute": 45, "sort_order": 1,
                  "comment": (
-                     "A shot is deflected. Bruno Fernandes from Manchester United "
-                     "attempts a right-footed strike from outside the penalty area, "
-                     "but it is blocked. The assist came from Amad Diallo."
+                     "Bruno Fernandes takes a right-footed shot outside the box "
+                     "that is blocked. The assist came from Amad Diallo."
+                 ), "is_goal": False},
+                {"id": 454, "minute": 45, "sort_order": 2,
+                 "comment": (
+                     "VAR penalty disallowed for Sunderland after a high boot "
+                     "by Benjamin Sesko near Trai Hume."
+                 ), "is_goal": False},
+                {"id": 457, "minute": 45, "sort_order": 3,
+                 "comment": "Corner awarded to Sunderland after the review.",
+                 "is_goal": False},
+                {"id": 459, "minute": 45, "sort_order": 4,
+                 "comment": (
+                     "Dan Ballard of Sunderland misses to the left with a header "
+                     "after a corner. Assisted by Granit Xhaka with a cross."
                  ), "is_goal": False},
             ],
             "ball_coordinates": [],
         }
         events = _selectable_events(game)
-        self.assertEqual(len(events), 1)
-        shot = events[0]
-        self.assertEqual(shot["id"], 451)
-        self.assertEqual(shot["team_id"], 14)
-        self.assertEqual(shot["player_id"], 129602)
-        self.assertEqual(shot["player"], "Bruno Fernandes")
-        self.assertEqual(shot["spatial"]["kind"], "blocked_shot")
-        self.assertEqual(shot["detail"]["secondary_flags"], ["penalty_disallowed"])
-        self.assertEqual(shot["detail"]["decision_event_ids"], [452])
-        self.assertEqual(shot["detail"]["decision_player_name"], "Trai Hume")
-        self.assertEqual(shot["detail"]["outcome_player_name"], "Trai Hume")
-        self.assertEqual(shot["spatial"]["outcome_kind"], "block")
-        self.assertEqual(shot["spatial"]["outcome_actor_id"], 24816771)
-        self.assertEqual(shot["spatial"]["outcome_actor_name"], "Trai Hume")
-        self.assertEqual(shot["spatial"]["outcome_actor_role"], "Defender")
-        self.assertEqual(shot["spatial"]["outcome_actor_team"], "away")
-        self.assertEqual(shot["spatial"]["outcome_actor_identification_source"], "linked_referee_decision")
-        self.assertEqual(shot["spatial"]["outcome_actor_anchor_source"], "inferred_contact_point")
+        self.assertEqual({e["id"] for e in events}, {451, 452, 456, 458})
+        bruno = next(e for e in events if e["id"] == 451)
+        decision = next(e for e in events if e["id"] == 452)
+        corner = next(e for e in events if e["id"] == 456)
+        header = next(e for e in events if e["id"] == 458)
+        self.assertEqual(bruno["player"], "Bruno Fernandes")
+        self.assertEqual(bruno["spatial"]["kind"], "blocked_shot")
         self.assertEqual(
-            [(phase["kind"], phase["actor_name"]) for phase in shot["detail"]["event_sequence"]],
-            [
-                ("assist", "Amad Diallo"),
-                ("shot", "Bruno Fernandes"),
-                ("block", "Trai Hume"),
-                ("review", None),
-                ("decision", None),
-            ],
+            [(p["kind"], p["actor_name"]) for p in bruno["detail"]["event_sequence"]],
+            [("assist", "Amad Diallo"), ("shot", "Bruno Fernandes"), ("block", None)],
         )
-        self.assertEqual(shot["related_player_name"], "Amad Diallo")
-        self.assertNotEqual(shot["detail"].get("situation"), "Penalty")
-        self.assertGreaterEqual(len(shot["spatial"]["ball_track"]), 2)
+        self.assertNotIn("penalty_disallowed", bruno["detail"].get("secondary_flags", []))
+        self.assertNotIn("outcome_actor_id", bruno["spatial"])
+        self.assertEqual(decision["spatial"]["kind"], "penalty_disallowed")
+        self.assertEqual(decision["commentary_id"], 454)
+        self.assertEqual(decision["player"], "Trai Hume")
+        self.assertEqual(decision["team_id"], 3)
+        self.assertEqual(decision["detail"]["follow_up_corner_event_id"], 456)
+        self.assertEqual([p["kind"] for p in decision["detail"]["event_sequence"]],
+                         ["review", "decision", "restart"])
+        self.assertEqual(corner["detail"]["preceded_by_penalty_decision_event_id"], 452)
+        self.assertEqual(corner["detail"]["follow_up_shot_event_id"], 458)
+        self.assertEqual(header["detail"]["preceded_by_corner_event_id"], 456)
+        self.assertEqual(header["player"], "Dan Ballard")
+        self.assertEqual(header["spatial"]["kind"], "shot_off_target")
 
-    def test_named_commentary_blocker_beats_referee_decision_actor(self):
+    def test_named_blocker_is_not_linked_to_unrelated_var_decision(self):
         game = {
             "home_team": {"id": 14, "name": "Home"},
             "away_team": {"id": 3, "name": "Away"},
@@ -1037,8 +1057,7 @@ class GoodGameWebTests(unittest.TestCase):
             "events": [],
             "timeline": [
                 {"id": 9001, "minute": 45, "period_id": 500,
-                 "team_id": 14, "player_id": 100,
-                 "type": "Shot", "text": "Shot"},
+                 "team_id": 14, "player_id": 100, "type": "Shot", "text": "Shot"},
                 {"id": 9002, "minute": 45, "period_id": 500,
                  "team_id": 3, "player_id": 300,
                  "type": "Penalty Cancelled", "text": "Penalty disallowed"},
@@ -1050,17 +1069,14 @@ class GoodGameWebTests(unittest.TestCase):
             "ball_coordinates": [],
         }
         events = _selectable_events(game)
-        self.assertEqual(len(events), 1)
-        event = events[0]
-        self.assertEqual(event["spatial"]["outcome_actor_id"], 200)
-        self.assertEqual(event["spatial"]["outcome_actor_name"], "Named Blocker")
-        self.assertEqual(event["detail"]["decision_player_name"], "Other Defender")
-        self.assertEqual(
-            event["detail"]["event_sequence"][0]["actor_name"], "Attacker"
-        )
-        self.assertEqual(
-            event["detail"]["event_sequence"][1]["actor_name"], "Named Blocker"
-        )
+        self.assertEqual(len(events), 2)
+        shot = next(e for e in events if e["id"] == 9001)
+        decision = next(e for e in events if e["id"] == 9002)
+        self.assertEqual(shot["spatial"]["outcome_actor_name"], "Named Blocker")
+        self.assertNotIn("decision_event_ids", shot["detail"])
+        self.assertIsNone(decision.get("commentary_id"))
+        self.assertEqual([p["kind"] for p in decision["detail"]["event_sequence"]],
+                         ["review", "decision"])
 
     def test_explicit_penalty_decision_commentary_stays_separate(self):
         game = {
@@ -1977,8 +1993,11 @@ class GoodGameWebTests(unittest.TestCase):
         events = _selectable_events(game)
         minute_events = [event for event in events if event.get("minute") == 41]
 
-        self.assertEqual(len(minute_events), 1)
-        shot = minute_events[0]
+        self.assertEqual(len(minute_events), 2)
+        shot = next(e for e in minute_events if e["spatial"]["kind"] == "shot_off_target")
+        corner = next(e for e in minute_events if e["spatial"]["kind"] == "corner")
+        self.assertEqual(corner["detail"]["follow_up_shot_event_id"], shot["id"])
+        self.assertEqual(shot["detail"]["preceded_by_corner_event_id"], corner["id"])
         self.assertEqual(shot["player"], "Ben White")
         self.assertEqual(shot["spatial"]["kind"], "shot_off_target")
         self.assertEqual(shot["display_type"], "Shot Off Target")
