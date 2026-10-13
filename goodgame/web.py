@@ -755,8 +755,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 if comment_minute != minute or not (
                     "woodwork" in woodwork_text
                     or re.search(
-                        r"\\b(?:hit|hits|struck|strikes|clips|clipped|off)\\b"
-                        r".{0,35}\\b(?:post|upright|crossbar|bar)\\b",
+                        r"\b(?:hit|hits|struck|strikes|clips|clipped|off)\b"
+                        r".{0,35}\b(?:post|upright|crossbar|bar)\b",
                         woodwork_text,
                     )
                 ):
@@ -1990,17 +1990,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ).casefold().split())
             contact_kind = "crossbar"
             contact_source = "illustrative"
-            if re.search(r"\\b(?:crossbar|(?:the |goal )?bar)\\b", contact_text) and re.search(
-                r"\\b(?:hits?|strikes?|clips?|off|against)\\b", contact_text
+            if re.search(r"\b(?:crossbar|(?:the |goal )?bar)\b", contact_text) and re.search(
+                r"\b(?:hits?|strikes?|clips?|off|against)\b", contact_text
             ):
                 contact_kind = "crossbar"
                 contact_source = "commentary"
-            elif re.search(r"\\b(?:post|upright)\\b", contact_text) and re.search(
-                r"\\b(?:hits?|strikes?|clips?|off|against)\\b", contact_text
+            elif re.search(r"\b(?:post|upright)\b", contact_text) and re.search(
+                r"\b(?:hits?|strikes?|clips?|off|against)\b", contact_text
             ):
                 contact_kind = (
-                    "left_post" if re.search(r"\\bleft\\s+(?:hand\\s+)?(?:post|upright)\\b", contact_text)
-                    else "right_post" if re.search(r"\\bright\\s+(?:hand\\s+)?(?:post|upright)\\b", contact_text)
+                    "left_post" if re.search(r"\bleft\s+(?:hand\s+)?(?:post|upright)\b", contact_text)
+                    else "right_post" if re.search(r"\bright\s+(?:hand\s+)?(?:post|upright)\b", contact_text)
                     else "post"
                 )
                 contact_source = "commentary"
