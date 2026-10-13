@@ -186,6 +186,12 @@ def commentary_simulations(
         supplemented["events"] = [*(game.get("events") or []), *added]
         selected = [event for event in build_events(supplemented) if is_backed(event)]
 
+    # Provider may emit complementary statistics for the same foul:
+    # player commits foul AND opponent is awarded a free kick. Reconcile into
+    # one incident before placing its player at a contextual ball coordinate.
+    from goodgame.foul_reconciliation import reconcile_fouls
+    selected = reconcile_fouls(selected, game)
+
     # Commentary controls actors/roles/zones and linked corner deliveries.
     # Tracking may refine a named location, but cannot replace the narrative
     # actor with whichever player happens to be near a ball endpoint.
