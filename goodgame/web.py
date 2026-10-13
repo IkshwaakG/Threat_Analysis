@@ -3193,9 +3193,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             and side(shot) in {"home", "away"}
             and side(decision) in {"home", "away"}
             and side(shot) != side(decision)
-            and decision_actor.get("team_location") == side(decision)
+            and decision_actor.get("team") == side(decision)
             and str(decision_actor.get("player_id")) != str(shot.get("player_id"))
-            and int(decision_actor.get("position_id") or 0) == 25
+            and decision_actor.get("role") == "Defender"
         ):
             block_anchor = player_position_anchor(
                 shot, decision_actor.get("player_id")
@@ -3217,7 +3217,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     "outcome_actor_id": decision_actor.get("player_id"),
                     "outcome_actor_name": str(decision_actor.get("name") or "").strip(),
                     "outcome_actor_role": "Defender",
-                    "outcome_actor_team": decision_actor.get("team_location"),
+                    "outcome_actor_team": decision_actor.get("team"),
                     "outcome_actor_anchor": block_anchor,
                     "outcome_actor_anchor_source": anchor_source,
                     "outcome_actor_identification_source": "linked_referee_decision",
