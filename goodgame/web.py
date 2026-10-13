@@ -780,7 +780,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             return None
 
-        scorer = str(item.get("player") or "").strip().casefold()
+        # Provider timeline rows often contain only player_id. Resolve that
+        # name before comparing commentary candidates; otherwise two shots
+        # from different players in the same minute can grab the same text.
+        scorer = str(
+            item.get("player") or player_name_for_id(item.get("player_id")) or ""
+        ).strip().casefold()
         candidates: list[tuple[int, int, dict[str, Any]]] = []
         for comment in commentary_rows:
             try:
