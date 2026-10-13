@@ -3125,28 +3125,24 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     # displayed minute: multiple possessions occur during stoppage time.
     # Keep a decision selectable, linked to a restart only with team and
     # same-period support, and never infer a blocker from its named player.
-    # Corners/free-kicks are setup context when a following attempt explicitly
-    # says it came from that restart. Keep the shot/goal as the selectable
-    # event and its detail.situation as the cause; do not render a second,
-    # misleading standalone Corner using unrelated ball-coordinate geometry.
-    context_event_ids: set[int] = set()
-    corner_context_attempts = [
-        event for event in merged
-        if semantic_event_kind(event) in attempt_kinds
-        and str((event.get("detail") or {}).get("situation") or "").casefold() == "corner"
+    # A corner and the shot taken FROM it are distinct football actions:
+    # retain both selectable rows. Link the restart to the following attempt
+    # when commentary explicitly states "after a corner", and only when the
+    # team, period, clock, and candidate match unambiguously.
+    corners = [
+        e for e in merged if semantic_event_kind(e) == "corner"
     ]
-
-    for corner in merged:
-        if semantic_event_kind(corner) != "corner":
+    for attempt in merged:
+        if semantic_event_kind(attempt) not in attempt_kinds:
             continue
-        try:
-            corner_minute = int(corner.get("minute"))
-        except (TypeError, ValueError):
+        detail = dict(attempt.get("detail") or {})
+        if str(detail.get("situation") or "").casefold() != "corner":
             continue
-
-        linked = False
-        for attempt in corner_context_attempts:
-            if attempt.get("team_id") != corner.get("team_id"):
+        if attempt.get("commentary_id") is None:
+            continue
+        possible_corners = []
+        for corner in corners:
+            if side(corner) != side(attempt) or side(corner) not in {"home", "away"}:
                 continue
             if (
                 corner.get("period_id") is not None
@@ -3155,22 +3151,61 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ):
                 continue
             try:
-                attempt_minute = int(attempt.get("minute"))
-            except (TypeError, ValueError):
+                minutes_apart = int(attempt["minute"]) - int(corner["minute"])
+            except (KeyError, TypeError, ValueError):
                 continue
-            minute_delta = attempt_minute - corner_minute
-            if 0 <= minute_delta <= 1:
-                linked = True
-                break
+            if minutes_apart in (0, 1):
+                possible_corners.append(corner)
+        if len(possible_corners) != 1:
+            continue
+        corner = possible_corners[0]
+        if corner.get("id") is None or attempt.get("id") is None:
+            continue
+        detail["preceded_by_corner_event_id"] = corner["id"]
+        attempt["detail"] = detail
+        corner_detail = dict(corner.get("detail") or {})
+        corner_detail["follow_up_shot_event_id"] = attempt["id"]
+        corner["detail"] = corner_detail
 
-        if linked:
-            context_event_ids.add(id(corner))
-
-    if context_event_ids:
-        merged = [
-            event for event in merged
-            if id(event) not in context_event_ids
-        ]
+    # A penalty review can be followed by a corner awarded to the SAME
+    # side. Link the actions without converting a referee decision into a
+    # shot or merging unrelated attempts by clock minute.
+    for decision in merged:
+        if semantic_event_kind(decision) != "penalty_disallowed":
+            continue
+        matches = []
+        for corner in corners:
+            if side(corner) != side(decision) or side(corner) not in {"home", "away"}:
+                continue
+            if (
+                corner.get("period_id") is not None
+                and decision.get("period_id") is not None
+                and corner.get("period_id") != decision.get("period_id")
+            ):
+                continue
+            try:
+                delta = int(corner["minute"]) - int(decision["minute"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if delta in (0, 1):
+                matches.append(corner)
+        if len(matches) != 1:
+            continue
+        corner = matches[0]
+        if corner.get("id") is None or decision.get("id") is None:
+            continue
+        decision_detail = dict(decision.get("detail") or {})
+        decision_detail["follow_up_corner_event_id"] = corner["id"]
+        decision_detail["follow_up_corner_team"] = (
+            game.get("home_team", {}).get("name")
+            if side(corner) == "home"
+            else game.get("away_team", {}).get("name")
+        )
+        decision_detail["restart_link_source"] = "same_team_period_clock"
+        decision["detail"] = decision_detail
+        corner_detail = dict(corner.get("detail") or {})
+        corner_detail["preceded_by_penalty_decision_event_id"] = decision["id"]
+        corner["detail"] = corner_detail
 
     # Provider may expose the scored attempt as both a goal event and a
     # shot-on-target event. Keep the Goal as the canonical selectable event
@@ -3557,6 +3592,36 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 append_phase(
                     "decision", "Penalty cancelled",
                     evidence="provider_referee_decision",
+                )
+        elif kind == "penalty_disallowed":
+            append_phase(
+                "review", "Penalty decision reviewed",
+                evidence="inferred_from_cancelled_decision",
+                note="A cancelled penalty does not itself establish a ball trajectory.",
+            )
+            append_phase(
+                "decision", "Penalty cancelled",
+                str(event.get("player") or "") or None,
+                event.get("player_id"),
+                "provider_referee_decision",
+            )
+            if detail.get("follow_up_corner_event_id") is not None:
+                append_phase(
+                    "restart", "Corner awarded",
+                    str(detail.get("follow_up_corner_team") or "") or None,
+                    evidence="linked_restart",
+                    note="Next selectable event: corner kick.",
+                )
+        elif kind == "corner":
+            append_phase(
+                "corner", "Corner kick",
+                evidence="provider_event",
+            )
+            if detail.get("follow_up_shot_event_id") is not None:
+                append_phase(
+                    "link", "Next: shot from corner",
+                    evidence="linked_follow_up",
+                    note="The header/shot is selectable separately.",
                 )
         else:
             append_phase(
