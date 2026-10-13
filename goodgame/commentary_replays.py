@@ -31,7 +31,7 @@ def _kind(comment: dict[str, Any]) -> str | None:
         return "offside"
     if re.search(r"\b(?:yellow card|red card|booked)\b", text):
         return "card"
-    if re.search(r"\b(?:foul|free kick)\b", text):
+    if re.search(r"\b(?:foul|fouls|fouled|free kick)\b", text):
         return "foul"
     return None
 
@@ -205,4 +205,4 @@ def commentary_simulations(
     from goodgame.commentary_spatial import enrich_replays
     return enrich_replays(game, selected)
 
-# CI verifies team inferred from fouled player identity.
+# CI covers verb-form fouls with two named participants.
