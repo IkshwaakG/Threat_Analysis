@@ -956,6 +956,145 @@ class GoodGameWebTests(unittest.TestCase):
         event = _selectable_events(game)[0]
         self.assertNotEqual((event["detail"] or {}).get("situation"), "Penalty")
 
+    def test_penalty_cancellation_is_context_on_bruno_blocked_shot(self):
+        # A referee decision may be assigned to an opposing defender's team
+        # while the shot itself belongs to the attacking team.
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 3, "name": "Sunderland"},
+            "players": [
+                {"player_id": 129602, "name": "Bruno Fernandes", "team_id": 14,
+                 "team_location": "home", "position_id": 26},
+                {"player_id": 37317015, "name": "Amad Diallo", "team_id": 14,
+                 "team_location": "home", "position_id": 26},
+                {"player_id": 24816771, "name": "Trai Hume", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 451, "minute": 45, "period_id": 711, "team_id": 14,
+                 "player_id": 129602, "type": "Shot On Target",
+                 "text": "5th Shot On Target", "sort_order": 1},
+                {"id": 452, "minute": 45, "period_id": 711, "team_id": 3,
+                 "player_id": 24816771, "type": "Penalty Cancelled",
+                 "text": "Penalty disallowed", "sort_order": 2},
+            ],
+            "commentary": [
+                {"id": 453, "minute": 45, "sort_order": 3,
+                 "comment": (
+                     "A shot is deflected. Bruno Fernandes from Manchester United "
+                     "attempts a right-footed strike from outside the penalty area, "
+                     "but it is blocked. The assist came from Amad Diallo."
+                 ), "is_goal": False},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        self.assertEqual(len(events), 1)
+        shot = events[0]
+        self.assertEqual(shot["id"], 451)
+        self.assertEqual(shot["team_id"], 14)
+        self.assertEqual(shot["player_id"], 129602)
+        self.assertEqual(shot["player"], "Bruno Fernandes")
+        self.assertEqual(shot["spatial"]["kind"], "blocked_shot")
+        self.assertEqual(shot["detail"]["secondary_flags"], ["penalty_disallowed"])
+        self.assertEqual(shot["detail"]["decision_event_ids"], [452])
+        self.assertEqual(shot["detail"]["decision_player_name"], "Trai Hume")
+        self.assertEqual(shot["related_player_name"], "Amad Diallo")
+        self.assertNotEqual(shot["detail"].get("situation"), "Penalty")
+        self.assertGreaterEqual(len(shot["spatial"]["ball_track"]), 2)
+
+    def test_explicit_penalty_decision_commentary_stays_separate(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 1, "name": "Home Shooter", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 2, "name": "Away Defender", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 501, "minute": 45, "team_id": 14, "player_id": 1,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+                {"id": 502, "minute": 45, "team_id": 3, "player_id": 2,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+            ],
+            "commentary": [
+                {"id": 503, "minute": 45, "sort_order": 1,
+                 "comment": "Home Shooter has a shot saved."},
+                {"id": 504, "minute": 45, "sort_order": 2,
+                 "comment": "VAR confirms the penalty was cancelled, no penalty awarded."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        self.assertEqual(len(events), 2)
+        decision = next(e for e in events if e["id"] == 502)
+        self.assertEqual(decision["spatial"]["kind"], "penalty_disallowed")
+        self.assertEqual(decision["commentary_id"], 504)
+        self.assertNotEqual(decision["spatial"]["kind"], "shot_on_target")
+
+    def test_opposing_team_commentary_never_turns_card_into_shot(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 1, "name": "Home Shooter", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 2, "name": "Away Defender", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+            ],
+            "events": [
+                {"id": 602, "minute": 45, "team_id": 3, "player_id": 2,
+                 "type": "Yellow Card", "text": "Yellow Card"},
+                {"id": 601, "minute": 45, "team_id": 14, "player_id": 1,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+            ],
+            "timeline": [],
+            "commentary": [
+                {"id": 603, "minute": 45, "sort_order": 1,
+                 "comment": "Home Shooter takes a shot saved by the goalkeeper."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        card = next(e for e in events if e["id"] == 602)
+        shot = next(e for e in events if e["id"] == 601)
+        self.assertEqual(card["spatial"]["kind"], "card")
+        self.assertIsNone(card.get("commentary_id"))
+        self.assertEqual(shot["commentary_id"], 603)
+        self.assertEqual(shot["player_id"], 1)
+
+    def test_penalty_decision_without_clear_shot_keeps_own_entry(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [],
+            "events": [],
+            "timeline": [
+                {"id": 701, "minute": 45, "team_id": 3,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+                {"id": 702, "minute": 45, "team_id": 14,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+                {"id": 703, "minute": 45, "team_id": 14,
+                 "type": "Shot Off Target", "text": "Shot Off Target"},
+            ],
+            "commentary": [
+                {"id": 704, "minute": 45, "sort_order": 1,
+                 "comment": "First shot is saved."},
+                {"id": 705, "minute": 45, "sort_order": 2,
+                 "comment": "Another shot misses wide."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        # Ambiguity must never merge a decision with an arbitrary shot.
+        penalty = next(e for e in events if e["id"] == 701)
+        self.assertEqual(penalty["spatial"]["kind"], "penalty_disallowed")
+        self.assertNotIn("decision_event_ids", penalty.get("detail") or {})
+
     def test_goalkeeper_provider_actor_is_replaced_by_commentary_shooter(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
