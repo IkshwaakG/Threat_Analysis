@@ -186,6 +186,8 @@ def commentary_simulations(
         supplemented["events"] = [*(game.get("events") or []), *added]
         selected = [event for event in build_events(supplemented) if is_backed(event)]
 
-    # Everything here has verifiable commentary provenance. No fabricated
-    # fixture/player ids, unsupported stat milestones, or fake decision ball.
-    return selected
+    # Commentary controls actors/roles/zones and linked corner deliveries.
+    # Tracking may refine a named location, but cannot replace the narrative
+    # actor with whichever player happens to be near a ball endpoint.
+    from goodgame.commentary_spatial import enrich_replays
+    return enrich_replays(game, selected)
