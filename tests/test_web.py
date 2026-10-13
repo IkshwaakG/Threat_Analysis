@@ -1083,6 +1083,42 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual([p["kind"] for p in decision["detail"]["event_sequence"]],
                          ["review", "decision"])
 
+    def test_var_review_area_tracks_attacking_side_not_defender_formation(self):
+        # Sunderland (away) attacks LEFT before halftime, RIGHT after.
+        # A defender's lineup position is not the incident location.
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 20, "name": "Away Defender", "team_id": 3,
+                 "team_location": "away", "position_id": 25,
+                 "formation_field": "2:2"},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 401, "minute": 45, "team_id": 3, "player_id": 20,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+                {"id": 402, "minute": 46, "team_id": 3, "player_id": 20,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+                {"id": 403, "minute": 45, "team_id": 14,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+            ],
+            "commentary": [], "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        by_id = {row["id"]: row for row in events}
+        self.assertEqual(set(by_id), {401, 402, 403})
+        for row in by_id.values():
+            self.assertEqual(row["spatial"]["kind"], "penalty_disallowed")
+            self.assertEqual(row["spatial"]["source"], "decision_only")
+            self.assertEqual(row["spatial"]["ball_track"], [])
+            self.assertIsNone(row["spatial"]["ball_path"])
+            self.assertEqual(row["spatial"]["review_anchor_source"], "illustrative_attacking_area")
+        self.assertLess(by_id[401]["spatial"]["anchor"]["x"], 25.0)
+        self.assertGreater(by_id[402]["spatial"]["anchor"]["x"], 75.0)
+        self.assertGreater(by_id[403]["spatial"]["anchor"]["x"], 75.0)
+        self.assertIn("Illustrative", by_id[401]["spatial"]["reconstruction_note"])
+
     def test_explicit_penalty_decision_commentary_stays_separate(self):
         game = {
             "home_team": {"id": 14, "name": "Home"},
