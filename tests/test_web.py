@@ -692,7 +692,8 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["display_type"], "Shot On Target")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
         self.assertEqual(event["detail"]["shot_origin"], "left side of the box")
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
 
     def test_event_minute_13_maps_to_12xx_ball_timer_window(self):
         game = {
@@ -990,8 +991,12 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
-        self.assertLess(event["spatial"]["outcome_marker"]["x"], 10.0)
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_actor_id"], 30)
+        self.assertEqual(event["spatial"]["outcome_actor_name"], "Caoimhin Kelleher")
+        self.assertEqual(event["spatial"]["outcome_actor_role"], "Goalkeeper")
+        self.assertEqual(event["spatial"]["outcome_actor_team"], "away")
+        self.assertNotIn("outcome_marker", event["spatial"])
 
     def test_cross_then_blocked_shot_adds_missing_shot_phase(self):
         game = {
@@ -1078,7 +1083,53 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
         self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+        self.assertEqual(event["spatial"]["outcome_kind"], "block")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
+        self.assertNotIn("outcome_marker", event["spatial"])
+
+    def test_commentary_named_blocker_uses_real_defender_and_explicit_anchor(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {"player_id": 10, "name": "Attacker Player", "team_id": 1,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 20, "name": "Defender Player", "team_id": 2,
+                 "team_location": "away", "position_id": 25},
+                {"player_id": 11, "name": "Home Teammate", "team_id": 1,
+                 "team_location": "home", "position_id": 25},
+            ],
+            "events": [{
+                "id": 9500, "minute": 14, "period_id": 100,
+                "type": "Shot", "text": "Shot", "team_id": 1, "player_id": 10,
+                "player": "Attacker Player", "is_home": True, "detail": {},
+                "player_positions": [
+                    {"player_id": 20, "x": 88.0, "y": 53.0},
+                ],
+            }],
+            "timeline": [],
+            "commentary": [{
+                "id": 9501, "minute": 14,
+                "comment": (
+                    "Attacker Player takes a shot from outside the box, "
+                    "but the attempt is blocked by Defender Player."
+                ),
+                "is_goal": False, "sort_order": 1,
+            }],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+        event = next(row for row in _selectable_events(game) if row.get("id") == 9500)
+        spatial = event["spatial"]
+        self.assertEqual(event["player_id"], 10)
+        self.assertEqual(spatial["outcome_kind"], "block")
+        self.assertEqual(spatial["outcome_actor_id"], 20)
+        self.assertEqual(spatial["outcome_actor_name"], "Defender Player")
+        self.assertEqual(spatial["outcome_actor_role"], "Defender")
+        self.assertEqual(spatial["outcome_actor_team"], "away")
+        self.assertEqual(spatial["outcome_actor_anchor"], {"x": 88.0, "y": 53.0})
+        self.assertEqual(spatial["outcome_actor_anchor_source"], "event_player_positions")
+        self.assertNotIn("outcome_marker", spatial)
 
     def test_saved_attempt_duplicate_rows_collapse_to_one_semantic_event(self):
         game = {
@@ -1181,7 +1232,8 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
         self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
 
     def test_corner_setup_is_hidden_when_commentary_identifies_following_shot(self):
         game = {
