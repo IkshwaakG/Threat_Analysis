@@ -140,11 +140,11 @@ def commentary_simulations(
             # defender belongs to Away. Awarding team overrides his identity.
             award = [
                 team for team in mentioned_teams
-                if re.search(
-                    r"\\bcorner awarded to\\s+" + re.escape(str(team["name"]).casefold())
-                    + r"\\b|\\b" + re.escape(str(team["name"]).casefold())
-                    + r"\\s+(?:wins?|awarded) (?:a )?corner\\b",
-                    lower,
+                if (
+                    "corner awarded to " + str(team["name"]).casefold() in lower
+                    or str(team["name"]).casefold() + " wins a corner" in lower
+                    or str(team["name"]).casefold() + " win a corner" in lower
+                    or str(team["name"]).casefold() + " awarded a corner" in lower
                 )
             ]
             if len(award) == 1:
