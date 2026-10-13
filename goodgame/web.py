@@ -3848,14 +3848,32 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         detail["event_sequence"] = sequence
         event["detail"] = detail
 
-    merged.sort(
-        key=lambda item: (
-            item.get("minute") if item.get("minute") is not None else 999,
-            item.get("extra_minute") if item.get("extra_minute") is not None else 0,
-            item.get("sort_order") if item.get("sort_order") is not None else 999,
-            0 if item.get("source_kind") == "event" else 1 if item.get("source_kind") == "timeline" else 2,
+    def _event_chronology_key(item: dict[str, Any]) -> tuple[int, int, int, int]:
+        detail = item.get("detail") or {}
+        commentary_steps = detail.get("ordered_commentary_steps") or []
+        # An unclocked cancellation cannot precede a VAR review we KNOW
+        # happened later. Sort it after its last confirmed commentary step,
+        # without fabricating an exact penalty-cancellation clock time.
+        latest_step = commentary_steps[-1] if commentary_steps else {}
+        extra = item.get("extra_minute")
+        if extra is None and latest_step.get("extra_minute") is not None:
+            extra = latest_step["extra_minute"]
+        order = item.get("sort_order")
+        if (
+            commentary_steps
+            and latest_step.get("sort_order") is not None
+            and item.get("extra_minute") is None
+        ):
+            order = _clock_number(latest_step["sort_order"]) + 1
+        return (
+            _clock_number(item.get("minute"), 999),
+            _clock_number(extra),
+            _clock_number(order, 999999),
+            0 if item.get("source_kind") == "event"
+            else 1 if item.get("source_kind") == "timeline" else 2,
         )
-    )
+
+    merged.sort(key=_event_chronology_key)
     return merged
 
 
