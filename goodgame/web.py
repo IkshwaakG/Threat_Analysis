@@ -277,6 +277,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
     # 105 x 68 m reference pitch. IFAB goal opening is 7.32 m wide.
     GOAL_HALF_WIDTH_PERCENT = (7.32 / 68.0) * 50.0
+    GOAL_CORNER_INSET_PERCENT = GOAL_HALF_WIDTH_PERCENT * 0.82
+    GOAL_NET_DEPTH_PERCENT = (0.85 / 105.0) * 100.0
     PENALTY_SPOT_FROM_GOAL_PERCENT = (11.0 / 105.0) * 100.0
     PENALTY_SPOT_RIGHT_X = 100.0 - PENALTY_SPOT_FROM_GOAL_PERCENT
     PENALTY_SPOT_LEFT_X = PENALTY_SPOT_FROM_GOAL_PERCENT
@@ -1061,6 +1063,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             y = 50.0
         return {"x": x, "y": y}
 
+    def goal_target_y(
+        attacks_right: bool,
+        context: dict[str, Any],
+        *,
+        frame: bool = False,
+    ) -> float:
+        side_label = str(context.get("goal_side") or "center").casefold()
+        offset = GOAL_HALF_WIDTH_PERCENT if frame else GOAL_CORNER_INSET_PERCENT
+        if side_label == "left":
+            return 50.0 - offset if attacks_right else 50.0 + offset
+        if side_label == "right":
+            return 50.0 + offset if attacks_right else 50.0 - offset
+        return 50.0
+
     def semantic_shot_end(
         item: dict[str, Any],
         team_side: str | None,
@@ -1070,40 +1086,50 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         target_x = attacking_x(item, team_side, 100.0, 0.0)
         attacks_right = target_x > 50.0
         hint = str(context.get("shot_outcome_hint") or "").casefold()
-        goal_side = str(context.get("goal_side") or "").casefold()
-
-        if goal_side == "left":
-            target_y = 46.0 if attacks_right else 54.0
-        elif goal_side == "right":
-            target_y = 54.0 if attacks_right else 46.0
-        else:
-            target_y = 50.0
+        target_y = goal_target_y(attacks_right, context)
 
         if hint == "blocked":
             launch = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, 82.0, 18.0),
                 "y": 50.0,
             }
-            # A block happens before the goal line. Put the terminal point
-            # between the shot origin and goal, inside the attacking penalty area.
+            # A block occurs before the goal frame. Keep the contact point on
+            # the shot line rather than snapping the ball onto the goalkeeper.
             x = float(launch["x"]) + (target_x - float(launch["x"])) * 0.42
             y = float(launch["y"]) + (target_y - float(launch["y"])) * 0.42
             return {"x": x, "y": y}
 
         if hint == "saved":
-            # Save marker sits just in front of the goal line rather than inside
-            # the net. Commentary target (top/right/etc.) still controls Y.
-            x = 98.2 if attacks_right else 1.8
+            # A save happens in front of the goal line. Use the exact target
+            # side from commentary but never place the ball inside the net.
+            x = 99.15 if attacks_right else 0.85
             return {"x": x, "y": target_y}
+
+        if hint == "post":
+            frame_y = goal_target_y(attacks_right, context, frame=True)
+            if frame_y == 50.0:
+                seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
+                frame_y = 50.0 + (
+                    GOAL_HALF_WIDTH_PERCENT
+                    if seed % 2
+                    else -GOAL_HALF_WIDTH_PERCENT
+                )
+            return {"x": target_x, "y": frame_y}
+
+        if hint == "bar":
+            return {"x": target_x, "y": target_y}
+
+        if hint == "woodwork":
+            # Provider sometimes says only "woodwork" without post/bar detail.
+            # Keep the terminal on the frame line without inventing a side.
+            return {"x": target_x, "y": target_y}
 
         if hint == "left":
             y = 50.0 - (GOAL_HALF_WIDTH_PERCENT + 2.6)
         elif hint == "right":
             y = 50.0 + (GOAL_HALF_WIDTH_PERCENT + 2.6)
-        elif hint in {"high", "bar"}:
+        elif hint == "high":
             y = 50.0
-        elif hint == "post":
-            y = 50.0 + GOAL_HALF_WIDTH_PERCENT
         elif kind == "shot_off_target":
             seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
             offsets = (
@@ -1122,16 +1148,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         team_side: str | None,
         context: dict[str, Any],
     ) -> dict[str, float]:
-        target_x = attacking_x(item, team_side, 100.0, 0.0)
-        attacks_right = target_x > 50.0
-        side_label = str(context.get("goal_side") or "center").casefold()
-        if side_label == "left":
-            y = 46.0 if attacks_right else 54.0
-        elif side_label == "right":
-            y = 54.0 if attacks_right else 46.0
-        else:
-            y = 50.0
-        return {"x": target_x, "y": y}
+        goal_line_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = goal_line_x > 50.0
+        # A scored ball should finish just inside the net, not on the painted
+        # goal line. 0.85 m is within the rendered 2 m goal depth.
+        x = (
+            goal_line_x + GOAL_NET_DEPTH_PERCENT
+            if attacks_right
+            else goal_line_x - GOAL_NET_DEPTH_PERCENT
+        )
+        y = goal_target_y(attacks_right, context)
+        return {"x": x, "y": y}
 
     def fixture_role_anchor(
         item: dict[str, Any],
@@ -1385,15 +1412,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         against the *correct attacking goal* for the event team and half.
         Provider x/y values are rendered directly; they are never mirrored.
         """
-        if kind not in {
-            "goal",
-            "corner",
-            "shot",
-            "shot_on_target",
-            "shot_off_target",
-            "penalty",
-            "offside",
-        }:
+        if kind not in {"goal", "corner", "offside", *SHOT_LIKE_KINDS}:
             return []
 
         try:
@@ -1977,7 +1996,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     # goal-line end, not by team/home/half assumptions.
                     end_x = 13.0 if start_x < 50.0 else 87.0
                     end = {"x": end_x, "y": box_y}
-                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+                elif kind in SHOT_LIKE_KINDS:
                     end = semantic_shot_end(item, team_side, context, kind)
 
             normalized_path = (
@@ -2036,7 +2055,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "highlight_player_id": None,
             }
 
-        if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+        if kind in SHOT_LIKE_KINDS:
             start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
             start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, start_x, 100.0 - start_x),
@@ -2119,7 +2138,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     else:
                         detail[key] = value
 
-                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                if kind in ATTEMPT_KINDS:
                     if not item.get("player") or item.get("player_id") is None:
                         shooter = commentary_player_for_role(comment_text, "shooter")
                         if shooter is not None:
@@ -2170,7 +2189,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item,
                     coordinate_track,
                 )
-            elif coordinate_track and kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            elif coordinate_track and kind in SHOT_LIKE_KINDS:
                 coordinate_track, shot_start_index = split_assisted_shot_track(
                     item,
                     coordinate_track,
@@ -2191,7 +2210,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 has_assist_phase = shot_start_index > 0
                 if kind == "goal" and has_assist_phase:
                     spatial_data["source"] = "stored_assist_goal"
-                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and has_assist_phase:
+                elif kind in SHOT_LIKE_KINDS and has_assist_phase:
                     spatial_data["source"] = "stored_assist_shot"
                 else:
                     spatial_data["source"] = "stored"
@@ -2203,7 +2222,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     "end": coordinate_track[-1],
                 }
 
-                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                if kind in ATTEMPT_KINDS:
                     # Player markers are not tied to ball-path endpoints.
                     # Position them only when comments/facts/player_positions
                     # give us evidence for an actor location.
@@ -2269,7 +2288,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
-            if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+            if not coordinate_track and kind in ATTEMPT_KINDS:
                 semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
                 stored_actor_anchor = player_position_anchor(item, item.get("player_id"))
                 path_end = (
@@ -2297,7 +2316,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
-            if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+            if kind in ATTEMPT_KINDS:
                 spatial_data = semantic_attempt_spatial(
                     item,
                     kind,
