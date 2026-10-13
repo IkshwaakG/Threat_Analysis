@@ -3670,6 +3670,44 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         event["ball_path"] = spatial_data["ball_path"]
         event["ball_track"] = spatial_data["ball_track"]
 
+    # Build referee sequences from the actual provider commentary. An
+    # award at 45+3, concession at 45+5 and review at 45+7 are different
+    # chronological facts, even though their regulation minute is the same.
+    # Link only a unique decision for the beneficiary team in that minute.
+    decisions_by_clock: dict[tuple[int, str], list[dict[str, Any]]] = {}
+    for event in merged:
+        if semantic_event_kind(event) != "penalty_disallowed":
+            continue
+        beneficiary = side(event)
+        if beneficiary in {"home", "away"}:
+            key = (_clock_number(event.get("minute"), -1), beneficiary)
+            decisions_by_clock.setdefault(key, []).append(event)
+
+    for (minute, beneficiary), decisions in decisions_by_clock.items():
+        if len(decisions) != 1:
+            continue
+        event = decisions[0]
+        event_extra = event.get("extra_minute")
+        related = [
+            step for step in penalty_commentary_steps
+            if step["team_side"] == beneficiary
+            and _clock_number(step.get("minute"), -1) == minute
+            and (
+                event_extra is None
+                or step.get("extra_minute") is None
+                or _clock_number(step["extra_minute"]) <= _clock_number(event_extra)
+            )
+        ]
+        if not related:
+            continue
+        detail = dict(event.get("detail") or {})
+        detail["ordered_commentary_steps"] = related
+        detail["commentary_step_ids"] = [
+            step["commentary_id"] for step in related
+            if step.get("commentary_id") is not None
+        ]
+        event["detail"] = detail
+
     # Ordered evidence for the whole event, not just the moving ball.
     # Referee review/decision steps happen after the on-pitch sequence and
     # must never be represented as a second pass, shot, or ball trajectory.
@@ -3756,11 +3794,26 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     evidence="provider_referee_decision",
                 )
         elif kind == "penalty_disallowed":
-            append_phase(
-                "review", "Penalty decision reviewed",
-                evidence="inferred_from_cancelled_decision",
-                note="A cancelled penalty does not itself establish a ball trajectory.",
-            )
+            ordered_steps = detail.get("ordered_commentary_steps") or []
+            for step in ordered_steps:
+                kind_label = step["kind"]
+                append_phase(
+                    kind_label, step["label"],
+                    step.get("actor_name"),
+                    evidence="provider_commentary",
+                )
+                sequence[-1].update({
+                    "minute": step.get("minute"),
+                    "extra_minute": step.get("extra_minute"),
+                    "commentary_id": step.get("commentary_id"),
+                    "sort_order": step.get("sort_order"),
+                })
+            if not any(step["kind"] == "review" for step in ordered_steps):
+                append_phase(
+                    "review", "Penalty decision reviewed",
+                    evidence="inferred_from_cancelled_decision",
+                    note="Review implied by the cancellation record; no ball tracking.",
+                )
             append_phase(
                 "decision", "Penalty cancelled",
                 str(event.get("player") or "") or None,
