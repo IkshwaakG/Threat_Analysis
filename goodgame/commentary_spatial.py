@@ -50,11 +50,15 @@ def _zone(text: str, target: float, *, default_distance: float = 20.0
     # is the OUTER 16.5m-deep box; the smaller box is the 5.5m goal area.
     # Commentary describing close-range headers must stay inside the box,
     # never use a lineup/midfield position just because no coordinate exists.
-    if any(p in lower for p in (
+    six_yard_zone = any(p in lower for p in (
         "six-yard", "6-yard", "six yard", "goal area",
+    ))
+    if six_yard_zone:
+        distance = 4.0  # Inside the 5.5m-deep SMALL goal area
+    elif any(p in lower for p in (
         "close-range", "close range", "very close range", "point-blank",
     )):
-        distance = 7.5  # ~7.9m from goal, near the six-yard area
+        distance = 7.5  # Close-range, inside the LARGE penalty area
     elif any(p in lower for p in (
         "outside the box", "outside the penalty area",
         "outside penalty area", "outside the area",
@@ -77,8 +81,10 @@ def _zone(text: str, target: float, *, default_distance: float = 20.0
     left = bool(re.search(r"\bleft (?:side|wing|flank|byline)\b", lower))
     right = bool(re.search(r"\bright (?:side|wing|flank|byline)\b", lower))
     # Lateral side is from attacking player's view; mirror at the other end.
-    y = (34.0 if target > 50 else 66.0) if left else (
-        (66.0 if target > 50 else 34.0) if right else 50.0
+    lateral_offset = 6.0 if six_yard_zone else 16.0
+    y = (50.0 - lateral_offset if target > 50 else 50.0 + lateral_offset) if left else (
+        (50.0 + lateral_offset if target > 50 else 50.0 - lateral_offset)
+        if right else 50.0
     )
     return _point(target - (1 if target > 50 else -1) * distance, y)
 
@@ -609,4 +615,4 @@ def enrich_replays(
 
     return events
 
-# CI recheck of word-ordered foul subject.
+# CI verify final physical penalty-box and foul geometry.
