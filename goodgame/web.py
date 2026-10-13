@@ -3450,6 +3450,24 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     # rather than claiming the card itself has a measured ball flight.
     for event in merged:
         spatial_data = dict(event.get("spatial") or {})
+        # VAR checks, disallowed penalties, and cards are administrative
+        # outcomes, not measurable ball traversals. A synthetic shot-like
+        # path here would be actively misleading.
+        if semantic_event_kind(event) in {
+            "penalty_disallowed", "goal_disallowed", "card",
+        }:
+            spatial_data.update({
+                "source": "decision_only",
+                "ball_track": [],
+                "ball_path": None,
+                "reconstruction_note": (
+                    "Referee or disciplinary decision; no ball trajectory is implied."
+                ),
+            })
+            event["spatial"] = spatial_data
+            event["ball_track"] = []
+            event["ball_path"] = None
+            continue
         track = list(spatial_data.get("ball_track") or event.get("ball_track") or [])
         path = spatial_data.get("ball_path") or event.get("ball_path")
         if len(track) >= 2:
