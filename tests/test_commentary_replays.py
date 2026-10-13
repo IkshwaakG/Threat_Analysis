@@ -122,3 +122,5 @@ class CommentaryReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI validation: commentary-only spatial simulations.
