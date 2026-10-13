@@ -1056,10 +1056,10 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["outcome_actor_name"], "Named Blocker")
         self.assertEqual(event["detail"]["decision_player_name"], "Other Defender")
         self.assertEqual(
-            event["detail"]["event_sequence"][1]["actor_name"], "Attacker"
+            event["detail"]["event_sequence"][0]["actor_name"], "Attacker"
         )
         self.assertEqual(
-            event["detail"]["event_sequence"][2]["actor_name"], "Named Blocker"
+            event["detail"]["event_sequence"][1]["actor_name"], "Named Blocker"
         )
 
     def test_explicit_penalty_decision_commentary_stays_separate(self):
