@@ -4150,7 +4150,11 @@ def game_view(fixture_id: int) -> dict[str, Any]:
     _positive(fixture_id, "fixture_id")
     try:
         game = _repository().get_game_view(fixture_id)
-        game["selectable_events"] = _selectable_events(game)
+        from goodgame.commentary_replays import commentary_simulations
+
+        game["selectable_events"] = commentary_simulations(
+            game, _selectable_events(game), _selectable_events,
+        )
         game["spatial_flow"] = _spatial_flow(game)
         return game
     except (LookupError, ValueError, GoogleAPIError, GoogleAuthError) as error:
