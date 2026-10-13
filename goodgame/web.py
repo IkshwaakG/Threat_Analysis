@@ -567,6 +567,48 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
+    def commentary_defensive_player(text: str) -> dict[str, Any] | None:
+        """Resolve the keeper/blocker named as the defensive actor in commentary."""
+        lower = str(text or "").casefold()
+        if not lower:
+            return None
+
+        players = [
+            row for row in game.get("players", []) or []
+            if isinstance(row, dict) and row.get("name")
+        ]
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for player in players:
+            name = str(player.get("name") or "").strip()
+            if not name:
+                continue
+            pos = lower.find(name.casefold())
+            if pos < 0:
+                continue
+
+            before = lower[max(0, pos - 55):pos]
+            after = lower[pos + len(name):pos + len(name) + 55]
+            defensive = (
+                "saved by" in before
+                or "save by" in before
+                or "blocked by" in before
+                or "denied by" in before
+                or "parried by" in before
+                or after.lstrip().startswith("saves")
+                or after.lstrip().startswith("save")
+                or after.lstrip().startswith("blocks")
+                or after.lstrip().startswith("block")
+                or after.lstrip().startswith("denies")
+                or after.lstrip().startswith("parries")
+                or " makes the save" in after
+            )
+            if not defensive:
+                continue
+            role_penalty = 0 if int(player.get("position_id") or 0) == 24 else 8
+            candidates.append((role_penalty + pos, player))
+
+        return min(candidates, key=lambda row: row[0])[1] if candidates else None
+
     def commentary_action_kind(comment: dict[str, Any]) -> str:
         text = str(comment.get("comment") or "").casefold()
         if comment.get("is_goal") is True or text.startswith("goal!") or " scores " in f" {text} ":
@@ -817,8 +859,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ("wide to the right", "right"),
             ("too high", "high"),
             ("over the bar", "high"),
+            ("hits the crossbar", "bar"),
+            ("hit the crossbar", "bar"),
+            ("off the crossbar", "bar"),
             ("hits the bar", "bar"),
+            ("hit the bar", "bar"),
+            ("off the bar", "bar"),
             ("hits the post", "post"),
+            ("hit the post", "post"),
+            ("off the post", "post"),
+            ("woodwork", "woodwork"),
             ("blocked", "blocked"),
             ("makes a save", "saved"),
             ("make a save", "saved"),
@@ -830,6 +880,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if phrase in lower:
                 context["shot_outcome_hint"] = outcome
                 break
+
+        if context.get("shot_outcome_hint") == "bar":
+            context["goal_height"] = "crossbar"
+            context["goal_height_ratio"] = 1.0
+            context["frame_contact"] = "crossbar"
+        elif context.get("shot_outcome_hint") == "post":
+            context["frame_contact"] = "post"
+            if "left post" in lower or "left upright" in lower:
+                context["goal_side"] = "left"
+            elif "right post" in lower or "right upright" in lower:
+                context["goal_side"] = "right"
+            context.setdefault("goal_height_ratio", 0.38)
+        elif context.get("shot_outcome_hint") == "woodwork":
+            context["frame_contact"] = "woodwork"
 
         if "shot_outcome_hint" not in context and (
             "miss" in lower or "attempt missed" in lower
@@ -872,11 +936,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if text.startswith("goal!") or " goal! " in f" {text} ":
             return "goal"
 
-        if original_kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+        if original_kind in SHOT_LIKE_KINDS:
             outcome = str(context.get("shot_outcome_hint") or "").casefold()
             if outcome == "saved":
                 return "shot_on_target"
-            if outcome in {"left", "right", "high", "bar", "post"}:
+            if outcome == "blocked":
+                return "blocked_shot"
+            if outcome in {"bar", "post", "woodwork"}:
+                return "woodwork"
+            if outcome in {"left", "right", "high"}:
                 return "shot_off_target"
 
         return original_kind
