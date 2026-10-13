@@ -2136,6 +2136,27 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             {"x": float(player["x"]), "y": float(player["y"])}
             if player is not None else None
         )
+        if kind in {"penalty_disallowed", "goal_disallowed"}:
+            # Referee reviews have NO ball traversal. Put the review-area
+            # highlight at the end the event team was attacking, not at a
+            # defender's starting formation position (which can be in the
+            # entirely opposite half). Exact incident coordinates are not
+            # present, so this is an explicitly illustrative zone.
+            review_x = attacking_x(item, team_side, 84.0, 16.0)
+            review_anchor = {"x": review_x, "y": 50.0}
+            return {
+                "kind": kind,
+                "source": "decision_only",
+                "anchor": review_anchor,
+                "ball_path": None,
+                "ball_track": [],
+                "highlight_player_id": item.get("player_id"),
+                "review_anchor_source": "illustrative_attacking_area",
+                "reconstruction_note": (
+                    "Illustrative referee-review area in the attacking end; "
+                    "no incident tracking or ball traversal is available."
+                ),
+            }
         if kind == "woodwork":
             # The timeline establishes that the ball hit the goal frame, but
             # does not establish its flight, height, or which part was struck.
