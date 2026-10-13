@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import threading
@@ -266,6 +267,41 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_ball_coordinates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert provider unit-space ball samples to the API's 0..100 pitch.
+
+    The feed may supply x/y as fractions, including minor float overshoot
+    such as -0.00999999. Decide the scale once per fixture, not per sample,
+    so near-corner positions on an already normalized pitch stay intact.
+    """
+    samples: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            x, y = float(row["x"]), float(row["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        samples.append({**row, "x": x, "y": y})
+
+    unit_space = (
+        len(samples) >= 4
+        and all(-0.05 <= p[axis] <= 1.05 for p in samples for axis in ("x", "y"))
+        and any(p[axis] >= 0.20 for p in samples for axis in ("x", "y"))
+    )
+    scale = 100.0 if unit_space else 1.0
+    return [
+        {
+            **point,
+            "x": round(max(0.0, min(100.0, point["x"] * scale)), 3),
+            "y": round(max(0.0, min(100.0, point["y"] * scale)), 3),
+        }
+        for point in samples
+    ]
+
+
 def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     """Merge provider events + timeline into one selectable spatial event list."""
     visual_players = _visual_players(game)
@@ -297,8 +333,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
         if "substitution" in value:
             return "substitution"
-        if "goal" in value:
+        # "goalkeeper" is not a goal, and WOODWORK is not a scored attempt.
+        if re.search(r"\bgoal\b", value):
             return "goal"
+        if "woodwork" in value or "crossbar" in value or "goalpost" in value:
+            return "woodwork"
         if "yellow" in value or "red" in value or "card" in value:
             return "card"
         if "corner" in value:
@@ -411,13 +450,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         # Unknown ownership stays central instead of inventing direction.
         return 50.0
 
-    ball_coordinates = [
-        point
-        for point in game.get("ball_coordinates", []) or []
-        if isinstance(point, dict)
-        and point.get("x") is not None
-        and point.get("y") is not None
-    ]
+    ball_coordinates = _normalize_ball_coordinates(
+        game.get("ball_coordinates", []) or []
+    )
 
     def timer_seconds(value: Any) -> int | None:
         """Provider timer is match time in MM:SS."""
@@ -569,49 +604,101 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
-    def commentary_defensive_player(text: str) -> dict[str, Any] | None:
-        """Resolve the keeper/blocker named as the defensive actor in commentary."""
-        lower = str(text or "").casefold()
-        if not lower:
-            return None
+    def defensive_actor_from_comment(
+        item: dict[str, Any],
+        comment: str,
+        outcome: str,
+        *,
+        attacker_side: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Find an explicitly named saver/blocker on the opposing team.
 
-        players = [
-            row for row in game.get("players", []) or []
-            if isinstance(row, dict) and row.get("name")
-        ]
+        Never promote the shooter or an assister to defensive actor, and do
+        not guess a name from a keeper's lineup position alone.
+        """
+        attacker_side = attacker_side or side(item)
+        if attacker_side not in {"home", "away"}:
+            return None
+        defender_side = "away" if attacker_side == "home" else "home"
+        phrase = " ".join(str(comment or "").casefold().split())
+        verbs = (
+            r"\b(?:sav(?:e|es|ed|ing)|den(?:y|ies|ied)|stopp?ed|"
+            r"parr(?:y|ies|ied))\b"
+            if outcome == "save"
+            else r"\b(?:block(?:s|ed|ing)?|deflect(?:s|ed|ing)?)\b"
+        )
         candidates: list[tuple[int, dict[str, Any]]] = []
-        for player in players:
-            name = str(player.get("name") or "").strip()
+        for player in game.get("players", []) or []:
+            if not isinstance(player, dict):
+                continue
+            if player.get("team_location") != defender_side:
+                continue
+            name = " ".join(str(player.get("name") or "").casefold().split())
             if not name:
                 continue
-            pos = lower.find(name.casefold())
-            if pos < 0:
-                continue
+            for mention in re.finditer(r"\b" + re.escape(name) + r"\b", phrase):
+                prefix = phrase[max(0, mention.start() - 120):mention.start()]
+                suffix = phrase[mention.end():mention.end() + 90]
+                # "saved in the top corner by Robin Roefs"
+                by_actor = re.search(
+                    verbs + r".{0,105}\bby\s+(?:[\w'-]+\s+){0,3}$",
+                    prefix,
+                )
+                # "Robin Roefs from Sunderland makes a great save"
+                actor_verb = re.search(
+                    (r"\b(?:makes?.{0,35}save|saves?|saved|denies|stops|parries)\b"
+                     if outcome == "save"
+                     else r"\b(?:blocks?|deflects?|makes?.{0,35}block)\b"),
+                    suffix,
+                )
+                if by_actor:
+                    candidates.append((0, player))
+                elif actor_verb:
+                    candidates.append((1, player))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: entry[0])
+        return candidates[0][1]
 
-            before = lower[max(0, pos - 55):pos]
-            after = lower[pos + len(name):pos + len(name) + 55]
-            defensive = (
-                "saved by" in before
-                or "save by" in before
-                or ("saved" in before and " by " in before)
-                or "blocked by" in before
-                or ("blocked" in before and " by " in before)
-                or "denied by" in before
-                or "parried by" in before
-                or after.lstrip().startswith("saves")
-                or after.lstrip().startswith("save")
-                or after.lstrip().startswith("blocks")
-                or after.lstrip().startswith("block")
-                or after.lstrip().startswith("denies")
-                or after.lstrip().startswith("parries")
-                or " makes the save" in after
-            )
-            if not defensive:
-                continue
-            role_penalty = 0 if int(player.get("position_id") or 0) == 24 else 8
-            candidates.append((role_penalty + pos, player))
+    def defensive_actor_spatial(
+        item: dict[str, Any],
+        spatial_data: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        hint = str(context.get("shot_outcome_hint") or "").casefold()
+        if hint not in {"saved", "blocked"}:
+            return
+        outcome = "save" if hint == "saved" else "block"
+        spatial_data["outcome_kind"] = outcome
+        spatial_data.pop("outcome_marker", None)
 
-        return min(candidates, key=lambda row: row[0])[1] if candidates else None
+        defender = defensive_actor_from_comment(
+            item, str(item.get("commentary_text") or ""), outcome
+        )
+        if defender is None:
+            return  # Unknown actor: keep only the result label, never an icon.
+        actor_id = defender.get("player_id")
+        point = player_position_anchor(item, actor_id)
+        anchor_source = "event_player_positions" if point else None
+        if point is None:
+            path = spatial_data.get("ball_path")
+            end = path.get("end") if isinstance(path, dict) else None
+            if isinstance(end, dict) and end.get("x") is not None and end.get("y") is not None:
+                point = {"x": float(end["x"]), "y": float(end["y"])}
+                anchor_source = "inferred_contact_point"
+        if point is None:
+            point = semantic_shot_end(item, side(item), context, str(spatial_data.get("kind") or "shot"))
+            anchor_source = "inferred_contact_point"
+
+        role = _visual_role(defender.get("position_id"))
+        spatial_data.update({
+            "outcome_actor_id": actor_id,
+            "outcome_actor_name": str(defender.get("name") or "").strip(),
+            "outcome_actor_role": role,
+            "outcome_actor_team": defender.get("team_location"),
+            "outcome_actor_anchor": point,
+            "outcome_actor_anchor_source": anchor_source,
+        })
 
     def commentary_action_kind(comment: dict[str, Any]) -> str:
         text = str(comment.get("comment") or "").casefold()
@@ -702,7 +789,21 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             action_kind = commentary_action_kind(comment)
             minute_delta = abs(comment_minute - minute)
-            if kind == "corner":
+            if kind == "woodwork":
+                # A separately reported woodwork milestone is NOT the same
+                # attempt as a saved shot in that minute. Only attach text
+                # explicitly describing a contact with the goal frame.
+                woodwork_text = str(comment.get("comment") or "").casefold()
+                if comment_minute != minute or not (
+                    "woodwork" in woodwork_text
+                    or re.search(
+                        r"\b(?:hit|hits|struck|strikes|clips|clipped|off)\b"
+                        r".{0,35}\b(?:post|upright|crossbar|bar)\b",
+                        woodwork_text,
+                    )
+                ):
+                    continue
+            elif kind == "corner":
                 # Corner timeline rows are occasionally one display minute after
                 # the commentary. Allow that small offset, but only for a true
                 # corner-award comment. Never attach "shot ... after a corner".
@@ -931,8 +1032,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         context: dict[str, Any],
     ) -> str:
         # Structured Goal is authoritative and can never be downgraded by text.
-        if original_kind == "goal":
-            return "goal"
+        if original_kind in {"goal", "woodwork"}:
+            return original_kind
 
         text = str((matched_commentary or {}).get("comment") or "").casefold()
         if matched_commentary and matched_commentary.get("is_goal") is True:
@@ -1962,6 +2063,116 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             {"x": float(player["x"]), "y": float(player["y"])}
             if player is not None else None
         )
+        if kind == "woodwork":
+            # The timeline establishes that the ball hit the goal frame, but
+            # does not establish its flight, height, or which part was struck.
+            # This replay is deliberately marked illustrative, even when a
+            # matched commentary row identifies the post/crossbar.
+            contact_text = " ".join(str(
+                context.get("commentary") or item.get("commentary_text") or ""
+            ).casefold().split())
+            contact_kind = "crossbar"
+            contact_source = "illustrative"
+            if re.search(r"\b(?:crossbar|(?:the |goal )?bar)\b", contact_text) and re.search(
+                r"\b(?:hits?|strikes?|clips?|off|against)\b", contact_text
+            ):
+                contact_kind = "crossbar"
+                contact_source = "commentary"
+            elif re.search(r"\b(?:post|upright)\b", contact_text) and re.search(
+                r"\b(?:hits?|strikes?|clips?|off|against)\b", contact_text
+            ):
+                contact_kind = (
+                    "left_post" if re.search(r"\bleft\s+(?:hand\s+)?(?:post|upright)\b", contact_text)
+                    else "right_post" if re.search(r"\bright\s+(?:hand\s+)?(?:post|upright)\b", contact_text)
+                    else "post"
+                )
+                contact_source = "commentary"
+
+            target_x = attacking_x(item, team_side, 100.0, 0.0)
+            # Without team ownership, don't guess which goal was attacked.
+            if target_x == 50.0:
+                return {
+                    "kind": "woodwork",
+                    "source": "outcome_only",
+                    "anchor": player_anchor,
+                    "ball_path": None,
+                    "highlight_player_id": item.get("player_id"),
+                    "contact_location": "unknown",
+                }
+
+            direction = 1.0 if target_x > 50.0 else -1.0
+            launch = (
+                semantic_shot_start(item, team_side, context)
+                or player_position_anchor(item, item.get("player_id"))
+                or fixture_role_anchor(item, item.get("player_id"), "shooter")
+            )
+            if launch is None:
+                launch = {
+                    "x": target_x - direction * 24.0,
+                    "y": 50.0,
+                }
+            # Real posts are at ±(7.32m/2) on a 68m-wide field; leave
+            # enough clearance for the animated ball's radius.
+            half_goal_width = GOAL_HALF_WIDTH_PERCENT
+            # Left/right post are named from the attacking player's view.
+            # Mirror the lateral side when attacking toward the left goal.
+            if contact_kind == "left_post":
+                contact_y = 50.0 - direction * (half_goal_width - 0.6)
+            elif contact_kind == "right_post":
+                contact_y = 50.0 + direction * (half_goal_width - 0.6)
+            elif contact_kind == "post":
+                # A post is confirmed, but its side is not: draw a neutral
+                # illustrative choice rather than asserting a factual side.
+                contact_y = 50.0 + half_goal_width - 0.6
+            else:
+                contact_y = 50.0
+
+            impact = {
+                "x": round(target_x - direction * 0.8, 3),
+                "y": round(contact_y, 3),
+            }
+            lateral = -1.0 if contact_y > 50.0 else 1.0
+            if abs(contact_y - 50.0) < 0.5:
+                lateral = 1.0
+            rebound = {
+                "x": round(target_x - direction * 12.0, 3),
+                "y": round(max(2.0, min(98.0, contact_y + lateral * 5.0)), 3),
+            }
+            landing = {
+                "x": round(target_x - direction * 20.0, 3),
+                "y": round(max(2.0, min(98.0, rebound["y"] + lateral * 5.0)), 3),
+            }
+            start = {
+                "x": round(float(launch["x"]), 3),
+                "y": round(float(launch["y"]), 3),
+            }
+            track = [start, impact, rebound, landing]
+            return {
+                "kind": "woodwork",
+                "source": "illustrative_reconstruction",
+                "anchor": start,
+                "ball_track": track,
+                "ball_path": {"start": start, "end": landing},
+                "shot_start_index": 0,
+                "phases": [
+                    {"kind": "shot", "start_index": 0, "end_index": 1},
+                    {"kind": "rebound", "start_index": 1, "end_index": 3},
+                ],
+                "highlight_player_id": item.get("player_id"),
+                "shot_actor_anchor": start,
+                "contact_location": contact_kind if contact_source == "commentary" else "unknown",
+                "woodwork_contact": {
+                    "kind": contact_kind,
+                    "index": 1,
+                    "source": contact_source,
+                },
+                "reconstruction_note": (
+                    "Illustrative rebound - exact contact point unknown"
+                    if contact_source != "commentary"
+                    else "Illustrative trajectory - frame contact described in commentary"
+                ),
+                "target_goal_x": target_x,
+            }
         stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
         source = "stored" if stored_path else "inferred"
 
@@ -2142,7 +2353,21 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
                 if kind in ATTEMPT_KINDS:
                     shooter = commentary_player_for_role(comment_text, "shooter")
-                    defensive_actor = commentary_defensive_player(comment_text)
+                    outcome_hint = str(comment_context.get("shot_outcome_hint") or "").casefold()
+                    defensive_actor = (
+                        defensive_actor_from_comment(
+                            item,
+                            comment_text,
+                            "save" if outcome_hint == "saved" else "block",
+                            attacker_side=(
+                                shooter.get("team_location")
+                                if shooter is not None
+                                else None
+                            ),
+                        )
+                        if outcome_hint in {"saved", "blocked"}
+                        else None
+                    )
                     structured_actor = player_for(item)
                     structured_is_goalkeeper = bool(
                         structured_actor
@@ -2364,7 +2589,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
-            if kind in ATTEMPT_KINDS:
+            if kind in ATTEMPT_KINDS and kind != "woodwork":
                 spatial_data = semantic_attempt_spatial(
                     item,
                     kind,
@@ -2380,6 +2605,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item.pop("ball_track", None)
                     item["ball_path"] = spatial_data.get("ball_path")
 
+            if kind in {
+                "shot",
+                "shot_on_target",
+                "shot_off_target",
+                "blocked_shot",
+                "penalty",
+            }:
+                defensive_actor_spatial(item, spatial_data, detail)
             item["spatial"] = spatial_data
             if not item.get("player") and item.get("player_id") is not None:
                 current = player_for(item)
@@ -2411,6 +2644,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["display_type"] = "Shot Off Target"
             elif kind == "shot":
                 item["display_type"] = "Shot"
+            elif kind == "woodwork":
+                item["display_type"] = "Woodwork"
             elif kind == "corner":
                 item["display_type"] = "Corner"
             else:

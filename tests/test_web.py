@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from goodgame.web import _selectable_events, app
+from goodgame.web import _normalize_ball_coordinates, _selectable_events, app
 
 
 class FakeServingRepository:
@@ -226,6 +226,118 @@ class FakeServingRepository:
 class GoodGameWebTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def test_fractional_ball_coordinates_normalize_without_changing_percent_samples(self):
+        fractional = [
+            {"timer": "24:01", "x": 0.9, "y": -0.00999999},
+            {"timer": "24:37", "x": 0.21, "y": 0.39},
+            {"timer": "25:01", "x": 0.21, "y": 0.39},
+            {"timer": "25:25", "x": 0.84, "y": 0.44},
+        ]
+        normalized = _normalize_ball_coordinates(fractional)
+        self.assertEqual([(row["x"], row["y"]) for row in normalized],
+                         [(90.0, 0.0), (21.0, 39.0), (21.0, 39.0), (84.0, 44.0)])
+        percent = [
+            {"x": 0.5, "y": 0.7}, {"x": 60.0, "y": 48.0},
+            {"x": 83.0, "y": 49.0}, {"x": 99.0, "y": 50.0},
+        ]
+        self.assertEqual(_normalize_ball_coordinates(percent), percent)
+
+    def test_woodwork_is_not_misclassified_as_saved_shot_or_goal(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 129602, "name": "Bruno Fernandes",
+                 "team_id": 14, "team_location": "home", "position_id": 26,
+                 "formation_field": "3:3"},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 157072715, "minute": 25, "period_id": 12,
+                 "team_id": 14, "player_id": 129602,
+                 "type": "Woodwork", "text": "1st Woodwork"},
+                {"id": 151643202, "minute": 25, "period_id": 12,
+                 "team_id": 14, "type": "Shot On Target",
+                 "text": "4th Shot On Target"},
+            ],
+            "commentary": [
+                {"id": 9556084, "minute": 25, "sort_order": 20,
+                 "comment": "Bruno Fernandes takes a right-footed shot from outside the penalty area. The attempt is saved in the top right corner by Robin Roefs, assisted by Mason Mount.",
+                 "is_goal": False},
+            ],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 12, "timer": "24:01", "x": 0.9, "y": -0.00999999},
+                {"id": 2, "period_id": 12, "timer": "24:37", "x": 0.21, "y": 0.39},
+                {"id": 3, "period_id": 12, "timer": "24:55", "x": 0.21, "y": 0.39},
+                {"id": 4, "period_id": 12, "timer": "25:25", "x": 0.84, "y": 0.44},
+            ],
+        }
+        events = _selectable_events(game)
+        woodwork = next(event for event in events if event["id"] == 157072715)
+        self.assertEqual(woodwork["spatial"]["kind"], "woodwork")
+        self.assertEqual(woodwork["display_type"], "Woodwork")
+        self.assertEqual(woodwork["spatial"]["source"], "illustrative_reconstruction")
+        self.assertEqual(woodwork["spatial"]["contact_location"], "unknown")
+        self.assertEqual(woodwork["spatial"]["woodwork_contact"], {
+            "kind": "crossbar", "index": 1, "source": "illustrative",
+        })
+        track = woodwork["spatial"]["ball_track"]
+        self.assertEqual(len(track), 4)
+        self.assertLess(track[0]["x"], track[1]["x"])
+        self.assertLess(track[2]["x"], track[1]["x"])
+        self.assertLess(track[3]["x"], track[2]["x"])
+        self.assertEqual(woodwork["spatial"]["ball_path"]["end"], track[-1])
+        self.assertIn("Illustrative", woodwork["spatial"]["reconstruction_note"])
+        self.assertIsNone(woodwork.get("commentary_id"))
+        shot = next(event for event in events if event["id"] == 151643202)
+        self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
+        self.assertEqual(shot.get("commentary_id"), 9556084)
+
+    def test_woodwork_replay_mirrors_direction_in_second_half(self):
+        game = {
+            "home_team": {"id": 11, "name": "Home"},
+            "away_team": {"id": 22, "name": "Away"},
+            "players": [],
+            "events": [],
+            "timeline": [
+                {"id": 501, "minute": 63, "team_id": 11,
+                 "type": "Woodwork", "text": "Woodwork"},
+                {"id": 502, "minute": 63, "team_id": 22,
+                 "type": "Woodwork", "text": "Woodwork"},
+            ],
+            "commentary": [], "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        home = next(x for x in events if x.get("id") == 501)["spatial"]["ball_track"]
+        away = next(x for x in events if x.get("id") == 502)["spatial"]["ball_track"]
+        self.assertLess(home[1]["x"], home[0]["x"])
+        self.assertGreater(home[2]["x"], home[1]["x"])
+        self.assertGreater(away[1]["x"], away[0]["x"])
+        self.assertLess(away[2]["x"], away[1]["x"])
+
+    def test_woodwork_left_post_matches_commentary_without_goal(self):
+        game = {
+            "home_team": {"id": 11, "name": "Home"},
+            "away_team": {"id": 22, "name": "Away"},
+            "players": [], "events": [],
+            "timeline": [
+                {"id": 503, "minute": 34, "team_id": 11,
+                 "type": "Woodwork", "text": "1st Woodwork"},
+            ],
+            "commentary": [
+                {"id": 2700, "minute": 34, "sort_order": 3,
+                 "comment": "The effort hits the left post and rebounds.",
+                 "is_goal": False},
+            ],
+            "ball_coordinates": [],
+        }
+        event = next(x for x in _selectable_events(game) if x.get("id") == 503)
+        self.assertEqual(event.get("commentary_id"), 2700)
+        self.assertEqual(event["spatial"]["woodwork_contact"]["kind"], "left_post")
+        self.assertEqual(event["spatial"]["woodwork_contact"]["source"], "commentary")
+        self.assertEqual(event["spatial"]["source"], "illustrative_reconstruction")
+        self.assertNotEqual(event["spatial"]["kind"], "goal")
 
     def test_video_cv_replaces_geometry_but_not_event_semantics(self):
         game = {
@@ -634,9 +746,10 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["display_type"], "Shot On Target")
         self.assertEqual(event["detail"]["shot_outcome_hint"], "saved")
         self.assertEqual(event["detail"]["shot_origin"], "left side of the box")
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
 
-    def test_woodwork_row_with_saved_comment_becomes_single_saved_shot(self):
+    def test_woodwork_row_with_saved_comment_stays_separate_from_saved_shot(self):
         game = {
             "home_team": {"id": 1, "name": "Manchester United"},
             "away_team": {"id": 2, "name": "Sunderland"},
@@ -728,8 +841,12 @@ class GoodGameWebTests(unittest.TestCase):
 
         events = [event for event in _selectable_events(game) if event.get("minute") == 25]
 
-        self.assertEqual(len(events), 1)
-        shot = events[0]
+        self.assertEqual(len(events), 2)
+        woodwork = next(event for event in events if event.get("id") == 1001)
+        self.assertEqual(woodwork["spatial"]["kind"], "woodwork")
+        self.assertEqual(woodwork["display_type"], "Woodwork")
+        self.assertIsNone(woodwork.get("commentary_id"))
+        shot = next(event for event in events if event.get("id") == 1002)
         self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
         self.assertEqual(shot["display_type"], "Shot On Target")
         self.assertEqual(shot["player"], "Bruno Fernandes")
@@ -885,7 +1002,10 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["display_type"], "Blocked Shot")
         self.assertEqual(event["spatial"]["kind"], "blocked_shot")
         self.assertEqual(event["detail"]["outcome_player_name"], "Away Defender")
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+        self.assertEqual(event["spatial"]["outcome_kind"], "block")
+        self.assertEqual(event["spatial"]["outcome_actor_id"], 25)
+        self.assertEqual(event["spatial"]["outcome_actor_name"], "Away Defender")
+        self.assertNotIn("outcome_marker", event["spatial"])
         self.assertLess(event["spatial"]["ball_path"]["end"]["x"], 100.0)
 
     def test_true_crossbar_event_stays_woodwork_and_hits_frame(self):
@@ -944,7 +1064,12 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["display_type"], "Woodwork")
         self.assertEqual(event["detail"]["frame_contact"], "crossbar")
         self.assertEqual(event["detail"]["goal_height_ratio"], 1.0)
-        self.assertEqual(event["spatial"]["ball_path"]["end"]["x"], 0.0)
+        track = event["spatial"]["ball_track"]
+        self.assertEqual(event["spatial"]["woodwork_contact"]["kind"], "crossbar")
+        self.assertGreater(track[0]["x"], track[1]["x"])
+        self.assertLess(track[1]["x"], track[2]["x"])
+        self.assertLess(track[2]["x"], track[3]["x"])
+        self.assertEqual(event["spatial"]["ball_path"]["end"], track[-1])
 
     def test_event_minute_13_maps_to_12xx_ball_timer_window(self):
         game = {
@@ -1242,8 +1367,12 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["phases"][0]["kind"], "assist")
         self.assertEqual(event["spatial"]["phases"][1]["kind"], "shot")
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
-        self.assertLess(event["spatial"]["outcome_marker"]["x"], 10.0)
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_actor_id"], 30)
+        self.assertEqual(event["spatial"]["outcome_actor_name"], "Caoimhin Kelleher")
+        self.assertEqual(event["spatial"]["outcome_actor_role"], "Goalkeeper")
+        self.assertEqual(event["spatial"]["outcome_actor_team"], "away")
+        self.assertNotIn("outcome_marker", event["spatial"])
 
     def test_cross_then_blocked_shot_adds_missing_shot_phase(self):
         game = {
@@ -1330,7 +1459,53 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
         self.assertGreater(event["spatial"]["ball_track"][-1]["x"], 86.0)
         self.assertLess(event["spatial"]["ball_track"][-1]["x"], 100.0)
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+        self.assertEqual(event["spatial"]["outcome_kind"], "block")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
+        self.assertNotIn("outcome_marker", event["spatial"])
+
+    def test_commentary_named_blocker_uses_real_defender_and_explicit_anchor(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {"player_id": 10, "name": "Attacker Player", "team_id": 1,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 20, "name": "Defender Player", "team_id": 2,
+                 "team_location": "away", "position_id": 25},
+                {"player_id": 11, "name": "Home Teammate", "team_id": 1,
+                 "team_location": "home", "position_id": 25},
+            ],
+            "events": [{
+                "id": 9500, "minute": 14, "period_id": 100,
+                "type": "Shot", "text": "Shot", "team_id": 1, "player_id": 10,
+                "player": "Attacker Player", "is_home": True, "detail": {},
+                "player_positions": [
+                    {"player_id": 20, "x": 88.0, "y": 53.0},
+                ],
+            }],
+            "timeline": [],
+            "commentary": [{
+                "id": 9501, "minute": 14,
+                "comment": (
+                    "Attacker Player takes a shot from outside the box, "
+                    "but the attempt is blocked by Defender Player."
+                ),
+                "is_goal": False, "sort_order": 1,
+            }],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+        event = next(row for row in _selectable_events(game) if row.get("id") == 9500)
+        spatial = event["spatial"]
+        self.assertEqual(event["player_id"], 10)
+        self.assertEqual(spatial["outcome_kind"], "block")
+        self.assertEqual(spatial["outcome_actor_id"], 20)
+        self.assertEqual(spatial["outcome_actor_name"], "Defender Player")
+        self.assertEqual(spatial["outcome_actor_role"], "Defender")
+        self.assertEqual(spatial["outcome_actor_team"], "away")
+        self.assertEqual(spatial["outcome_actor_anchor"], {"x": 88.0, "y": 53.0})
+        self.assertEqual(spatial["outcome_actor_anchor_source"], "event_player_positions")
+        self.assertNotIn("outcome_marker", spatial)
 
     def test_saved_attempt_duplicate_rows_collapse_to_one_semantic_event(self):
         game = {
@@ -1433,7 +1608,8 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["spatial"]["shot_start_index"], 1)
         self.assertEqual(event["spatial"]["ball_track"][0]["x"], event["spatial"]["assist_actor_anchor"]["x"])
         self.assertEqual(event["spatial"]["ball_track"][1]["x"], event["spatial"]["shot_actor_anchor"]["x"])
-        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
+        self.assertEqual(event["spatial"]["outcome_kind"], "save")
+        self.assertNotIn("outcome_actor_id", event["spatial"])
 
     def test_corner_setup_is_hidden_when_commentary_identifies_following_shot(self):
         game = {
