@@ -119,7 +119,7 @@ class FakeServingRepository:
                     "id": 5001,
                     "minute": 11,
                     "extra_minute": None,
-                    "comment": "Bruno Fernandes tests the goalkeeper from outside the box.",
+                    "comment": "Bruno Fernandes takes a shot saved by the goalkeeper from outside the box.",
                     "is_goal": False,
                     "is_important": True,
                     "sort_order": 9,
@@ -2230,28 +2230,11 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertLessEqual(abs(shot["ball_path"]["end"]["y"] - 50.0), 9.0)
         self.assertNotEqual(shot["ball_path"]["end"], {"x": 10.0, "y": 62.0})
 
-        corner = next(
-            event["spatial"]
-            for event in body["selectable_events"]
-            if event["spatial"]["kind"] == "corner"
-        )
-        self.assertIn(corner["source"], {"stored", "inferred", "commentary_inferred"})
-        self.assertGreaterEqual(corner["ball_path"]["start"]["x"], 95.0)
-        corner_y = float(corner["ball_path"]["start"]["y"])
-        self.assertLessEqual(min(corner_y, 100.0 - corner_y), 12.0)
-        self.assertGreater(corner["ball_path"]["end"]["x"], 70.0)
-        # Stored corner starts near the right goal line and must remain in that
-        # same attacking end rather than traversing across midfield.
-        self.assertGreater(corner["ball_path"]["end"]["x"], 50.0)
-
-        second_half_corner = next(
-            event["spatial"]
-            for event in body["selectable_events"]
-            if event.get("id") == 9003
-        )
-        self.assertEqual(second_half_corner["source"], "inferred")
-        self.assertLess(second_half_corner["ball_path"]["start"]["x"], 50.0)
-        self.assertLess(second_half_corner["ball_path"]["end"]["x"], 50.0)
+        # Corners with no matching commentary are still in the structured
+        # fixture feed but are no longer listed as independent replays.
+        self.assertEqual(len(body["selectable_events"]), 1)
+        self.assertEqual(body["selectable_events"][0]["id"], 9001)
+        self.assertEqual({item["id"] for item in body["events"]}, {9001, 9002, 9003})
 
     def test_visualization_is_derived_from_same_game_view(self):
         with patch("goodgame.web._repository", return_value=FakeServingRepository()):
