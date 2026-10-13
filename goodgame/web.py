@@ -620,13 +620,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 prefix = phrase[max(0, mention.start() - 120):mention.start()]
                 suffix = phrase[mention.end():mention.end() + 90]
                 # "saved in the top corner by Robin Roefs"
-                by_actor = (
-                    re.search(r"\bby\s+$", prefix)
-                    and re.search(verbs, prefix[: -len("by ")] or prefix)
+                by_actor = re.search(
+                    verbs + r".{0,105}\bby\s+(?:[\w'-]+\s+){0,3}$",
+                    prefix,
                 )
                 # "Robin Roefs from Sunderland makes a great save"
                 actor_verb = re.search(
-                    (r"\b(?:makes?.{0,35}save|denies|stops|parries)\b"
+                    (r"\b(?:makes?.{0,35}save|saves?|saved|denies|stops|parries)\b"
                      if outcome == "save"
                      else r"\b(?:blocks?|deflects?|makes?.{0,35}block)\b"),
                     suffix,
