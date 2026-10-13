@@ -294,6 +294,51 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
         self.assertEqual(shot.get("commentary_id"), 9556084)
 
+    def test_woodwork_replay_mirrors_direction_in_second_half(self):
+        game = {
+            "home_team": {"id": 11, "name": "Home"},
+            "away_team": {"id": 22, "name": "Away"},
+            "players": [],
+            "events": [],
+            "timeline": [
+                {"id": 501, "minute": 63, "team_id": 11,
+                 "type": "Woodwork", "text": "Woodwork"},
+                {"id": 502, "minute": 63, "team_id": 22,
+                 "type": "Woodwork", "text": "Woodwork"},
+            ],
+            "commentary": [], "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        home = next(x for x in events if x.get("id") == 501)["spatial"]["ball_track"]
+        away = next(x for x in events if x.get("id") == 502)["spatial"]["ball_track"]
+        self.assertLess(home[1]["x"], home[0]["x"])
+        self.assertGreater(home[2]["x"], home[1]["x"])
+        self.assertGreater(away[1]["x"], away[0]["x"])
+        self.assertLess(away[2]["x"], away[1]["x"])
+
+    def test_woodwork_left_post_matches_commentary_without_goal(self):
+        game = {
+            "home_team": {"id": 11, "name": "Home"},
+            "away_team": {"id": 22, "name": "Away"},
+            "players": [], "events": [],
+            "timeline": [
+                {"id": 503, "minute": 34, "team_id": 11,
+                 "type": "Woodwork", "text": "1st Woodwork"},
+            ],
+            "commentary": [
+                {"id": 2700, "minute": 34, "sort_order": 3,
+                 "comment": "The effort hits the left post and rebounds.",
+                 "is_goal": False},
+            ],
+            "ball_coordinates": [],
+        }
+        event = next(x for x in _selectable_events(game) if x.get("id") == 503)
+        self.assertEqual(event.get("commentary_id"), 2700)
+        self.assertEqual(event["spatial"]["woodwork_contact"]["kind"], "left_post")
+        self.assertEqual(event["spatial"]["woodwork_contact"]["source"], "commentary")
+        self.assertEqual(event["spatial"]["source"], "illustrative_reconstruction")
+        self.assertNotEqual(event["spatial"]["kind"], "goal")
+
     def test_video_cv_replaces_geometry_but_not_event_semantics(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
