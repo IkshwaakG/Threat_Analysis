@@ -360,7 +360,7 @@ def enrich_replays(
             ):
                 follow_lower = combined.casefold()
                 missed = re.search(
-                    r"\b(?:misses|missed|wide)\b.{0,22}\b(left|right)\b",
+                    r"\b(?:misses|missed|wide)\b.{0,110}\b(?:to (?:the )?|wide to (?:the )?)(left|right)\b",
                     follow_lower,
                 )
                 if missed:
