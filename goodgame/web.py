@@ -751,12 +751,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 # A separately reported woodwork milestone is NOT the same
                 # attempt as a saved shot in that minute. Only attach text
                 # explicitly describing a contact with the goal frame.
-                if comment_minute != minute or not any(
-                    phrase in str(comment.get("comment") or "").casefold()
-                    for phrase in (
-                        "woodwork", "hits the bar", "hits the post",
-                        "hit the post", "hit the bar", "off the crossbar",
-                        "off the post", "strikes the post", "strikes the bar",
+                woodwork_text = str(comment.get("comment") or "").casefold()
+                if comment_minute != minute or not (
+                    "woodwork" in woodwork_text
+                    or re.search(
+                        r"\\b(?:hit|hits|struck|strikes|clips|clipped|off)\\b"
+                        r".{0,35}\\b(?:post|upright|crossbar|bar)\\b",
+                        woodwork_text,
                     )
                 ):
                     continue
