@@ -74,7 +74,8 @@ class CommentarySpatialTests(unittest.TestCase):
         actors = {p["role"]: p for p in corner["spatial"]["actor_positions"]}
         self.assertEqual(corner["team_id"], 3)
         self.assertEqual(corner["detail"]["follow_up_commentary_id"], 301)
-        self.assertEqual(actors["corner_taker"]["player_id"], 202)
+        self.assertEqual(actors["crosser"]["player_id"], 202)
+        self.assertNotIn("corner_taker", actors)
         self.assertEqual(actors["receiver"]["player_id"], 201)
         self.assertNotIn(102, [p["player_id"] for p in corner["spatial"]["actor_positions"]])
         track = corner["spatial"]["ball_track"]
@@ -118,22 +119,94 @@ class CommentarySpatialTests(unittest.TestCase):
         self.assertEqual(shooter["position_source"], "commentary_zone_coordinate_refined")
         self.assertNotEqual(shooter["x"], 99)
 
-    def test_offside_and_foul_include_named_nonendpoint_participants(self):
+    def test_foul_without_ball_samples_has_no_traversal_or_player(self):
+        game = game_with(commentary=[
+            {"id": 402, "minute": 76, "sort_order": 2,
+             "comment": "Matheus Cunha earned a free kick in an offensive position."},
+        ])
+        # Add a named participant but NO tracking. Formation fallback is forbidden.
+        game["players"].append({
+            "player_id": 105, "name": "Matheus Cunha", "team_id": 14,
+            "team_location": "home", "position_id": 27,
+        })
+        rows = replays(game)
+        foul = next(p for p in rows if p["spatial"]["kind"] == "foul")
+        self.assertEqual(foul["spatial"]["source"], "foul_position_only")
+        self.assertEqual(foul["spatial"]["ball_track"], [])
+        self.assertIsNone(foul["spatial"]["ball_path"])
+        self.assertIsNone(foul["spatial"]["anchor"])
+        self.assertEqual(foul["spatial"]["actor_positions"], [])
+        self.assertIsNone(foul["ball_path"])
+
+    def test_foul_shows_only_fouled_player_at_first_ball_sample_of_minute(self):
+        game = game_with(commentary=[
+            {"id": 402, "minute": 34, "sort_order": 2,
+             "comment": "Trai Hume fouls Mason Mount on the right wing; free kick to Manchester United."},
+        ], ball_coordinates=[
+            # 34' displayed -> 33:00–33:59. Previous-minute point must not
+            # determine the fouled player's position.
+            {"id": 1, "timer": "32:55", "x": .8, "y": .7},
+            {"id": 2, "timer": "33:08", "x": .72, "y": .35},
+            {"id": 3, "timer": "33:13", "x": .73, "y": .4},
+            {"id": 4, "timer": "33:18", "x": .71, "y": .45},
+        ])
+        foul = replays(game)[0]
+        self.assertEqual(foul["spatial"]["ball_track"], [])
+        self.assertIsNone(foul["spatial"]["ball_path"])
+        positions = foul["spatial"]["actor_positions"]
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["player_id"], 101)  # fouled player
+        self.assertEqual((positions[0]["x"], positions[0]["y"]), (72, 35))
+        self.assertEqual(
+            positions[0]["position_source"],
+            "minute_ball_sample_context_not_player_tracking",
+        )
+
+    def test_outer_penalty_box_and_close_range_header_away_from_midfield(self):
+        game = game_with(commentary=[
+            {"id": 501, "minute": 85, "sort_order": 18,
+             "comment": (
+                 "Missed opportunity! Bruno Fernandes of Manchester United "
+                 "has a close-range header that went off target."
+             )},
+        ])
+        row = replays(game)[0]
+        scorer = next(a for a in row["spatial"]["actor_positions"]
+                      if a["role"] == "shooter")
+        self.assertLess(scorer["x"], 12)  # United attacks left in 2H
+        self.assertAlmostEqual(scorer["y"], 50, delta=4)
+        self.assertGreater(scorer["x"], 5)
+
+    def test_header_following_corner_places_crosser_near_wing_not_midfield(self):
+        game = game_with(commentary=[
+            {"id": 600, "minute": 84, "sort_order": 1,
+             "comment": "Corner awarded to Manchester United after Lutsharel Geertruida cleared the ball."},
+            {"id": 601, "minute": 85, "sort_order": 2,
+             "comment": (
+                 "Missed opportunity! Matheus Cunha of Manchester United had "
+                 "a close-range header that went off target. The assist came from "
+                 "Bruno Fernandes, who delivered a cross following a corner kick."
+             )},
+        ])
+        game["players"].append({
+            "player_id": 106, "name": "Matheus Cunha", "team_id": 14,
+            "team_location": "home", "position_id": 27,
+        })
+        rows = replays(game)
+        header = next(r for r in rows if r["spatial"]["kind"] == "shot_off_target")
+        header_actors = {a["role"]: a for a in header["spatial"]["actor_positions"]}
+        self.assertLess(header_actors["shooter"]["x"], 12)
+        self.assertLess(header_actors["assister"]["x"], 20)
+        self.assertGreater(abs(header_actors["assister"]["y"] - 50), 25)
+        self.assertEqual(header["spatial"]["actor_placement_policy"], "commentary_first")
+
+    def test_offside_still_places_mentioned_player_from_zone(self):
         game = game_with(commentary=[
             {"id": 401, "minute": 33, "sort_order": 1,
              "comment": "Offside against Manchester United, Bruno Fernandes is caught offside outside the penalty area."},
-            {"id": 402, "minute": 34, "sort_order": 2,
-             "comment": "Trai Hume fouls Mason Mount on the right wing; free kick to Manchester United."},
         ])
-        rows = replays(game)
-        offside = next(p for p in rows if p["spatial"]["kind"] == "offside")
-        foul = next(p for p in rows if p["spatial"]["kind"] == "foul")
+        offside = replays(game)[0]
         self.assertIn(100, [a["player_id"] for a in offside["spatial"]["actor_positions"]])
-        self.assertEqual({a["player_id"] for a in foul["spatial"]["actor_positions"]}, {203, 101})
-        self.assertNotEqual(
-            foul["spatial"]["actor_positions"][0]["x"],
-            foul["spatial"]["actor_positions"][1]["x"],
-        )
 
 
 if __name__ == "__main__":
