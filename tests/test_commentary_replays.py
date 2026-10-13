@@ -137,3 +137,5 @@ class CommentaryReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI-only verification of commentary corner ownership.
