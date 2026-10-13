@@ -3489,7 +3489,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "ball_track": [],
                 "ball_path": None,
                 "reconstruction_note": (
-                    "Referee or disciplinary decision; no ball trajectory is implied."
+                    spatial_data.get("reconstruction_note")
+                    or "Referee or disciplinary decision; no ball trajectory is implied."
                 ),
             })
             event["spatial"] = spatial_data
