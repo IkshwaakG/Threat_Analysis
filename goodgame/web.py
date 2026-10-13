@@ -821,6 +821,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             or "blocked by" in text
             or " blocks the shot" in f" {text} "
             or " blocks the attempt" in f" {text} "
+            or (
+                re.search(r"\bblocked\b", text)
+                and re.search(r"\b(?:shot|strike|attempt|header)\b", text)
+            )
         ):
             return "blocked_shot"
 
@@ -846,7 +850,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "shot_off_target"
 
         if (
-            " shot " in f" {text} "
+            re.search(r"\bshot\b", text)
+            or " shot " in f" {text} "
             or "header" in text
             or "heads the ball" in text
             or "headed the ball" in text
