@@ -277,9 +277,21 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
     # 105 x 68 m reference pitch. IFAB goal opening is 7.32 m wide.
     GOAL_HALF_WIDTH_PERCENT = (7.32 / 68.0) * 50.0
+    GOAL_CORNER_INSET_PERCENT = GOAL_HALF_WIDTH_PERCENT * 0.82
+    GOAL_NET_DEPTH_PERCENT = (0.85 / 105.0) * 100.0
     PENALTY_SPOT_FROM_GOAL_PERCENT = (11.0 / 105.0) * 100.0
     PENALTY_SPOT_RIGHT_X = 100.0 - PENALTY_SPOT_FROM_GOAL_PERCENT
     PENALTY_SPOT_LEFT_X = PENALTY_SPOT_FROM_GOAL_PERCENT
+
+    SHOT_LIKE_KINDS = {
+        "shot",
+        "shot_on_target",
+        "shot_off_target",
+        "blocked_shot",
+        "woodwork",
+        "penalty",
+    }
+    ATTEMPT_KINDS = {"goal", *SHOT_LIKE_KINDS}
 
     def category(item: dict[str, Any]) -> str:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
@@ -291,6 +303,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "card"
         if "corner" in value:
             return "corner"
+        if "woodwork" in value or "hit the post" in value or "hit the bar" in value or "crossbar" in value:
+            return "woodwork"
+        if "blocked shot" in value or "shot blocked" in value:
+            return "blocked_shot"
         if "shot on target" in value:
             return "shot_on_target"
         if "shot off target" in value:
@@ -553,10 +569,76 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return None
         return player
 
+    def commentary_defensive_player(text: str) -> dict[str, Any] | None:
+        """Resolve the keeper/blocker named as the defensive actor in commentary."""
+        lower = str(text or "").casefold()
+        if not lower:
+            return None
+
+        players = [
+            row for row in game.get("players", []) or []
+            if isinstance(row, dict) and row.get("name")
+        ]
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for player in players:
+            name = str(player.get("name") or "").strip()
+            if not name:
+                continue
+            pos = lower.find(name.casefold())
+            if pos < 0:
+                continue
+
+            before = lower[max(0, pos - 55):pos]
+            after = lower[pos + len(name):pos + len(name) + 55]
+            defensive = (
+                "saved by" in before
+                or "save by" in before
+                or ("saved" in before and " by " in before)
+                or "blocked by" in before
+                or ("blocked" in before and " by " in before)
+                or "denied by" in before
+                or "parried by" in before
+                or after.lstrip().startswith("saves")
+                or after.lstrip().startswith("save")
+                or after.lstrip().startswith("blocks")
+                or after.lstrip().startswith("block")
+                or after.lstrip().startswith("denies")
+                or after.lstrip().startswith("parries")
+                or " makes the save" in after
+            )
+            if not defensive:
+                continue
+            role_penalty = 0 if int(player.get("position_id") or 0) == 24 else 8
+            candidates.append((role_penalty + pos, player))
+
+        return min(candidates, key=lambda row: row[0])[1] if candidates else None
+
     def commentary_action_kind(comment: dict[str, Any]) -> str:
         text = str(comment.get("comment") or "").casefold()
         if comment.get("is_goal") is True or text.startswith("goal!") or " scores " in f" {text} ":
             return "goal"
+
+        if (
+            "hits the post" in text
+            or "hit the post" in text
+            or "off the post" in text
+            or "strikes the post" in text
+            or "hits the bar" in text
+            or "hit the bar" in text
+            or "off the bar" in text
+            or "crossbar" in text
+            or "woodwork" in text
+        ):
+            return "woodwork"
+
+        if (
+            "attempt blocked" in text
+            or "shot blocked" in text
+            or "blocked by" in text
+            or " blocks the shot" in f" {text} "
+            or " blocks the attempt" in f" {text} "
+        ):
+            return "blocked_shot"
 
         if (
             "attempt saved" in text
@@ -631,13 +713,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     continue
                 if kind == "goal" and action_kind != "goal":
                     continue
-                if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind not in {
-                    "shot",
-                    "shot_on_target",
-                    "shot_off_target",
-                }:
+                if kind in SHOT_LIKE_KINDS and action_kind not in SHOT_LIKE_KINDS:
                     continue
-                if kind not in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind == "goal":
+                if kind not in ATTEMPT_KINDS and action_kind == "goal":
                     continue
 
             text = str(comment.get("comment") or "")
@@ -652,6 +730,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "goal": ("goal", "scores"),
                 "shot_off_target": ("miss", "wide", "off target"),
                 "shot_on_target": ("shot", "saved", "on target"),
+                "blocked_shot": ("blocked", "block"),
+                "woodwork": ("woodwork", "post", "bar", "crossbar"),
                 "shot": ("shot", "attempt"),
                 "corner": ("corner",),
                 "card": ("card", "booked", "yellow", "red"),
@@ -665,7 +745,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             if action_kind == kind:
                 score -= 5
-            elif kind in {"shot", "shot_on_target", "shot_off_target"} and action_kind.startswith("shot"):
+            elif kind in SHOT_LIKE_KINDS and action_kind in SHOT_LIKE_KINDS:
                 score -= 2
 
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
@@ -783,8 +863,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ("wide to the right", "right"),
             ("too high", "high"),
             ("over the bar", "high"),
+            ("hits the crossbar", "bar"),
+            ("hit the crossbar", "bar"),
+            ("off the crossbar", "bar"),
             ("hits the bar", "bar"),
+            ("hit the bar", "bar"),
+            ("off the bar", "bar"),
             ("hits the post", "post"),
+            ("hit the post", "post"),
+            ("off the post", "post"),
+            ("woodwork", "woodwork"),
             ("blocked", "blocked"),
             ("makes a save", "saved"),
             ("make a save", "saved"),
@@ -796,6 +884,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if phrase in lower:
                 context["shot_outcome_hint"] = outcome
                 break
+
+        if context.get("shot_outcome_hint") == "bar":
+            context["goal_height"] = "crossbar"
+            context["goal_height_ratio"] = 1.0
+            context["frame_contact"] = "crossbar"
+        elif context.get("shot_outcome_hint") == "post":
+            context["frame_contact"] = "post"
+            if "left post" in lower or "left upright" in lower:
+                context["goal_side"] = "left"
+            elif "right post" in lower or "right upright" in lower:
+                context["goal_side"] = "right"
+            context.setdefault("goal_height_ratio", 0.38)
+        elif context.get("shot_outcome_hint") == "woodwork":
+            context["frame_contact"] = "woodwork"
 
         if "shot_outcome_hint" not in context and (
             "miss" in lower or "attempt missed" in lower
@@ -838,11 +940,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if text.startswith("goal!") or " goal! " in f" {text} ":
             return "goal"
 
-        if original_kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+        if original_kind in SHOT_LIKE_KINDS:
             outcome = str(context.get("shot_outcome_hint") or "").casefold()
             if outcome == "saved":
                 return "shot_on_target"
-            if outcome in {"left", "right", "high", "bar", "post"}:
+            if outcome == "blocked":
+                return "blocked_shot"
+            if outcome in {"bar", "post", "woodwork"}:
+                return "woodwork"
+            if outcome in {"left", "right", "high"}:
                 return "shot_off_target"
 
         return original_kind
@@ -959,6 +1065,20 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             y = 50.0
         return {"x": x, "y": y}
 
+    def goal_target_y(
+        attacks_right: bool,
+        context: dict[str, Any],
+        *,
+        frame: bool = False,
+    ) -> float:
+        side_label = str(context.get("goal_side") or "center").casefold()
+        offset = GOAL_HALF_WIDTH_PERCENT if frame else GOAL_CORNER_INSET_PERCENT
+        if side_label == "left":
+            return 50.0 - offset if attacks_right else 50.0 + offset
+        if side_label == "right":
+            return 50.0 + offset if attacks_right else 50.0 - offset
+        return 50.0
+
     def semantic_shot_end(
         item: dict[str, Any],
         team_side: str | None,
@@ -968,40 +1088,50 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         target_x = attacking_x(item, team_side, 100.0, 0.0)
         attacks_right = target_x > 50.0
         hint = str(context.get("shot_outcome_hint") or "").casefold()
-        goal_side = str(context.get("goal_side") or "").casefold()
-
-        if goal_side == "left":
-            target_y = 46.0 if attacks_right else 54.0
-        elif goal_side == "right":
-            target_y = 54.0 if attacks_right else 46.0
-        else:
-            target_y = 50.0
+        target_y = goal_target_y(attacks_right, context)
 
         if hint == "blocked":
             launch = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, 82.0, 18.0),
                 "y": 50.0,
             }
-            # A block happens before the goal line. Put the terminal point
-            # between the shot origin and goal, inside the attacking penalty area.
+            # A block occurs before the goal frame. Keep the contact point on
+            # the shot line rather than snapping the ball onto the goalkeeper.
             x = float(launch["x"]) + (target_x - float(launch["x"])) * 0.42
             y = float(launch["y"]) + (target_y - float(launch["y"])) * 0.42
             return {"x": x, "y": y}
 
         if hint == "saved":
-            # Save marker sits just in front of the goal line rather than inside
-            # the net. Commentary target (top/right/etc.) still controls Y.
-            x = 98.2 if attacks_right else 1.8
+            # A save happens in front of the goal line. Use the exact target
+            # side from commentary but never place the ball inside the net.
+            x = 99.15 if attacks_right else 0.85
             return {"x": x, "y": target_y}
+
+        if hint == "post":
+            frame_y = goal_target_y(attacks_right, context, frame=True)
+            if frame_y == 50.0:
+                seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
+                frame_y = 50.0 + (
+                    GOAL_HALF_WIDTH_PERCENT
+                    if seed % 2
+                    else -GOAL_HALF_WIDTH_PERCENT
+                )
+            return {"x": target_x, "y": frame_y}
+
+        if hint == "bar":
+            return {"x": target_x, "y": target_y}
+
+        if hint == "woodwork":
+            # Provider sometimes says only "woodwork" without post/bar detail.
+            # Keep the terminal on the frame line without inventing a side.
+            return {"x": target_x, "y": target_y}
 
         if hint == "left":
             y = 50.0 - (GOAL_HALF_WIDTH_PERCENT + 2.6)
         elif hint == "right":
             y = 50.0 + (GOAL_HALF_WIDTH_PERCENT + 2.6)
-        elif hint in {"high", "bar"}:
+        elif hint == "high":
             y = 50.0
-        elif hint == "post":
-            y = 50.0 + GOAL_HALF_WIDTH_PERCENT
         elif kind == "shot_off_target":
             seed = int(item.get("id") or 0) + int(item.get("minute") or 0)
             offsets = (
@@ -1020,16 +1150,17 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         team_side: str | None,
         context: dict[str, Any],
     ) -> dict[str, float]:
-        target_x = attacking_x(item, team_side, 100.0, 0.0)
-        attacks_right = target_x > 50.0
-        side_label = str(context.get("goal_side") or "center").casefold()
-        if side_label == "left":
-            y = 46.0 if attacks_right else 54.0
-        elif side_label == "right":
-            y = 54.0 if attacks_right else 46.0
-        else:
-            y = 50.0
-        return {"x": target_x, "y": y}
+        goal_line_x = attacking_x(item, team_side, 100.0, 0.0)
+        attacks_right = goal_line_x > 50.0
+        # A scored ball should finish just inside the net, not on the painted
+        # goal line. 0.85 m is within the rendered 2 m goal depth.
+        x = (
+            goal_line_x + GOAL_NET_DEPTH_PERCENT
+            if attacks_right
+            else goal_line_x - GOAL_NET_DEPTH_PERCENT
+        )
+        y = goal_target_y(attacks_right, context)
+        return {"x": x, "y": y}
 
     def fixture_role_anchor(
         item: dict[str, Any],
@@ -1283,15 +1414,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         against the *correct attacking goal* for the event team and half.
         Provider x/y values are rendered directly; they are never mirrored.
         """
-        if kind not in {
-            "goal",
-            "corner",
-            "shot",
-            "shot_on_target",
-            "shot_off_target",
-            "penalty",
-            "offside",
-        }:
+        if kind not in {"goal", "corner", "offside", *SHOT_LIKE_KINDS}:
             return []
 
         try:
@@ -1519,7 +1642,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             # Sparse provider fallback: choose the closest forward pair that
             # still clearly moves toward the correct goal. The first point is
             # always the shot-taking point; never return a pre-shot run.
-            if kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
+            if kind in ATTEMPT_KINDS:
                 sparse: list[tuple[float, int, int]] = []
                 for launch_index in range(0, len(compact_rows) - 1):
                     launch_point, launch_second = compact_rows[launch_index]
@@ -1615,15 +1738,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             selected = same_end if len(same_end) >= 2 else []
 
-        elif kind in {"goal", "shot_on_target", "penalty"}:
+        elif kind in {"goal", "shot_on_target", "woodwork", "penalty"}:
             selected = build_approach_segment(
                 on_target=True,
                 max_goal_distance=28.0,
             )
 
-        elif kind in {"shot", "shot_off_target"}:
-            # Off-target can miss wide or over the bar. With no Z coordinate,
-            # only require a meaningful approach toward the correct goal.
+        elif kind in {"shot", "shot_off_target", "blocked_shot"}:
+            # Off-target/blocked attempts may terminate before or beside the
+            # frame. Require meaningful goalward motion, not goal-line arrival.
             selected = build_approach_segment(
                 on_target=False,
                 max_goal_distance=32.0,
@@ -1875,7 +1998,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     # goal-line end, not by team/home/half assumptions.
                     end_x = 13.0 if start_x < 50.0 else 87.0
                     end = {"x": end_x, "y": box_y}
-                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+                elif kind in SHOT_LIKE_KINDS:
                     end = semantic_shot_end(item, team_side, context, kind)
 
             normalized_path = (
@@ -1934,7 +2057,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "highlight_player_id": None,
             }
 
-        if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+        if kind in SHOT_LIKE_KINDS:
             start_x = PENALTY_SPOT_RIGHT_X if kind == "penalty" else 78.0
             start = semantic_shot_start(item, team_side, context) or {
                 "x": attacking_x(item, team_side, start_x, 100.0 - start_x),
@@ -2017,33 +2140,79 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     else:
                         detail[key] = value
 
-                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
-                    if not item.get("player") or item.get("player_id") is None:
-                        shooter = commentary_player_for_role(comment_text, "shooter")
-                        if shooter is not None:
-                            item["player_id"] = shooter.get("player_id")
-                            item["player"] = shooter.get("name")
+                if kind in ATTEMPT_KINDS:
+                    shooter = commentary_player_for_role(comment_text, "shooter")
+                    defensive_actor = commentary_defensive_player(comment_text)
+                    structured_actor = player_for(item)
+                    structured_is_goalkeeper = bool(
+                        structured_actor
+                        and str(structured_actor.get("role") or "").casefold() == "goalkeeper"
+                    )
+                    structured_is_defensive_actor = bool(
+                        defensive_actor
+                        and item.get("player_id") is not None
+                        and str(defensive_actor.get("player_id")) == str(item.get("player_id"))
+                    )
 
-                    if (
-                        not item.get("related_player_name")
-                        and item.get("related_player_id") is None
+                    should_replace_shooter = bool(
+                        shooter
                         and (
-                            comment_context.get("assist_type")
-                            or "assist" in comment_text.casefold()
+                            not item.get("player")
+                            or item.get("player_id") is None
+                            or structured_is_defensive_actor
+                            or (
+                                structured_is_goalkeeper
+                                and str(shooter.get("player_id")) != str(item.get("player_id"))
+                            )
                         )
-                    ):
+                    )
+                    if should_replace_shooter and shooter is not None:
+                        if item.get("player_id") is not None or item.get("player"):
+                            detail["provider_actor_player_id"] = item.get("player_id")
+                            detail["provider_actor_player_name"] = item.get("player")
+                        item["player_id"] = shooter.get("player_id")
+                        item["player"] = shooter.get("name")
+                        if shooter.get("team_id") is not None:
+                            item["team_id"] = shooter.get("team_id")
+                        if shooter.get("team_location") == "home":
+                            item["is_home"] = True
+                        elif shooter.get("team_location") == "away":
+                            item["is_home"] = False
+
+                    if defensive_actor is not None:
+                        detail["outcome_player_id"] = defensive_actor.get("player_id")
+                        detail["outcome_player_name"] = defensive_actor.get("name")
+                        detail["outcome_player_role"] = (
+                            "Goalkeeper"
+                            if int(defensive_actor.get("position_id") or 0) == 24
+                            else "Defender"
+                        )
+
+                    if comment_context.get("assist_type") or "assist" in comment_text.casefold():
                         assister = commentary_player_for_role(
                             comment_text,
                             "assist",
                             exclude_player_id=item.get("player_id"),
                         )
                         if assister is not None:
+                            if (
+                                item.get("related_player_id") is not None
+                                and str(item.get("related_player_id")) != str(assister.get("player_id"))
+                            ):
+                                detail["provider_related_player_id"] = item.get("related_player_id")
+                                detail["provider_related_player_name"] = item.get("related_player_name")
                             item["related_player_id"] = assister.get("player_id")
                             item["related_player_name"] = assister.get("name")
 
                 item["commentary_id"] = matched_commentary.get("id")
                 item["commentary_text"] = comment_text
             item["detail"] = detail
+
+            team_side = side(item)
+            if team_side == "home":
+                item["is_home"] = True
+            elif team_side == "away":
+                item["is_home"] = False
 
             semantic_kind = semantic_kind_from_comment(
                 kind,
@@ -2068,7 +2237,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item,
                     coordinate_track,
                 )
-            elif coordinate_track and kind in {"shot", "shot_on_target", "shot_off_target", "penalty"}:
+            elif coordinate_track and kind in SHOT_LIKE_KINDS:
                 coordinate_track, shot_start_index = split_assisted_shot_track(
                     item,
                     coordinate_track,
@@ -2089,7 +2258,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 has_assist_phase = shot_start_index > 0
                 if kind == "goal" and has_assist_phase:
                     spatial_data["source"] = "stored_assist_goal"
-                elif kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and has_assist_phase:
+                elif kind in SHOT_LIKE_KINDS and has_assist_phase:
                     spatial_data["source"] = "stored_assist_shot"
                 else:
                     spatial_data["source"] = "stored"
@@ -2101,7 +2270,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     "end": coordinate_track[-1],
                 }
 
-                if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+                if kind in ATTEMPT_KINDS:
                     # Player markers are not tied to ball-path endpoints.
                     # Position them only when comments/facts/player_positions
                     # give us evidence for an actor location.
@@ -2167,7 +2336,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
                 item["ball_track"] = coordinate_track
                 item["ball_path"] = spatial_data["ball_path"]
-            if not coordinate_track and kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+            if not coordinate_track and kind in ATTEMPT_KINDS:
                 semantic_actor_anchor = semantic_shot_start(item, team_side, detail)
                 stored_actor_anchor = player_position_anchor(item, item.get("player_id"))
                 path_end = (
@@ -2195,7 +2364,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 outcome_marker = outcome_marker_for_shot(item, detail, path_end, kind)
                 if outcome_marker:
                     spatial_data["outcome_marker"] = outcome_marker
-            if kind in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}:
+            if kind in ATTEMPT_KINDS:
                 spatial_data = semantic_attempt_spatial(
                     item,
                     kind,
@@ -2234,6 +2403,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item["assist"] = assist
             elif kind == "shot_on_target":
                 item["display_type"] = "Shot On Target"
+            elif kind == "blocked_shot":
+                item["display_type"] = "Blocked Shot"
+            elif kind == "woodwork":
+                item["display_type"] = "Woodwork"
             elif kind == "shot_off_target":
                 item["display_type"] = "Shot Off Target"
             elif kind == "shot":
@@ -2474,13 +2647,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     # The real fixture payload can expose a saved shot simultaneously as raw
     # Shot On Target and Shot Off Target rows; both then attach to the same
     # commentary. One real-world attempt must produce one selectable event.
-    attempt_kinds = {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}
+    attempt_kinds = ATTEMPT_KINDS
     semantic_priority = {
-        "goal": 6,
-        "penalty": 5,
-        "shot_on_target": 4,
-        "shot_off_target": 3,
-        "shot": 2,
+        "goal": 7,
+        "penalty": 6,
+        "shot_on_target": 5,
+        "woodwork": 4,
+        "blocked_shot": 3,
+        "shot_off_target": 2,
+        "shot": 1,
     }
 
     grouped_attempts: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -2494,9 +2669,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         actor_key = event.get("player_id") or str(event.get("player") or "").strip().casefold()
         evidence_key = (
-            event.get("team_id"),
-            actor_key,
-            str(commentary_id) if commentary_id is not None else commentary_text,
+            ("commentary", event.get("team_id"), str(commentary_id))
+            if commentary_id is not None
+            else ("text", event.get("team_id"), actor_key, commentary_text)
         )
         grouped_attempts.setdefault(evidence_key, []).append(event)
 

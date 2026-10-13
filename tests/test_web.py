@@ -636,6 +636,316 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(event["detail"]["shot_origin"], "left side of the box")
         self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "save")
 
+    def test_woodwork_row_with_saved_comment_becomes_single_saved_shot(self):
+        game = {
+            "home_team": {"id": 1, "name": "Manchester United"},
+            "away_team": {"id": 2, "name": "Sunderland"},
+            "players": [
+                {
+                    "player_id": 8,
+                    "name": "Bruno Fernandes",
+                    "team_id": 1,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 8,
+                    "position_id": 26,
+                    "formation_field": "3:2",
+                    "formation_position": 6,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 7,
+                    "name": "Mason Mount",
+                    "team_id": 1,
+                    "team_name": "Manchester United",
+                    "team_location": "home",
+                    "jersey_number": 7,
+                    "position_id": 26,
+                    "formation_field": "3:1",
+                    "formation_position": 5,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 1,
+                    "name": "Robin Roefs",
+                    "team_id": 2,
+                    "team_name": "Sunderland",
+                    "team_location": "away",
+                    "jersey_number": 1,
+                    "position_id": 24,
+                    "formation_field": "1:1",
+                    "formation_position": 1,
+                    "match_stats": [],
+                },
+            ],
+            "events": [],
+            "timeline": [
+                {
+                    "id": 1001,
+                    "minute": 25,
+                    "period_id": 100,
+                    "type": "Woodwork",
+                    "text": "1st Woodwork",
+                    "team_id": 1,
+                    "player_id": 8,
+                    "player": "Bruno Fernandes",
+                    "is_home": True,
+                    "sort_order": 10,
+                },
+                {
+                    "id": 1002,
+                    "minute": 25,
+                    "period_id": 100,
+                    "type": "Shot On Target",
+                    "text": "4th Shot On Target",
+                    "team_id": 1,
+                    "player_id": 8,
+                    "player": "Bruno Fernandes",
+                    "related_player_id": 7,
+                    "related_player_name": "Mason Mount",
+                    "is_home": True,
+                    "sort_order": 11,
+                },
+            ],
+            "commentary": [
+                {
+                    "id": 5001,
+                    "minute": 25,
+                    "comment": (
+                        "Bruno Fernandes from Manchester United takes a right-footed shot "
+                        "from outside the penalty area. The attempt is saved in the top right "
+                        "corner by Robin Roefs of Sunderland, with Mason Mount providing the assist."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 25,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        events = [event for event in _selectable_events(game) if event.get("minute") == 25]
+
+        self.assertEqual(len(events), 1)
+        shot = events[0]
+        self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
+        self.assertEqual(shot["display_type"], "Shot On Target")
+        self.assertEqual(shot["player"], "Bruno Fernandes")
+        self.assertEqual(shot["related_player_name"], "Mason Mount")
+        self.assertEqual(shot["detail"]["outcome_player_name"], "Robin Roefs")
+        self.assertEqual(shot["detail"]["outcome_player_role"], "Goalkeeper")
+        self.assertEqual(shot["detail"]["shot_outcome_hint"], "saved")
+        self.assertEqual(shot["detail"]["goal_target"], "top right corner")
+        self.assertEqual(shot["detail"]["goal_height_ratio"], 0.82)
+        self.assertLess(shot["spatial"]["ball_path"]["end"]["x"], 100.0)
+        self.assertGreater(shot["spatial"]["ball_path"]["end"]["y"], 50.0)
+
+    def test_goalkeeper_provider_actor_is_replaced_by_commentary_shooter(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Actual Shooter",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 30,
+                    "name": "Away Keeper",
+                    "team_id": 2,
+                    "team_name": "Away",
+                    "team_location": "away",
+                    "jersey_number": 1,
+                    "position_id": 24,
+                    "formation_field": "1:1",
+                    "formation_position": 1,
+                    "match_stats": [],
+                },
+            ],
+            "events": [
+                {
+                    "id": 1100,
+                    "minute": 33,
+                    "period_id": 100,
+                    "type": "Shot On Target",
+                    "text": "Shot On Target",
+                    "team_id": 2,
+                    "player_id": 30,
+                    "player": "Away Keeper",
+                    "is_home": False,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 5100,
+                    "minute": 33,
+                    "comment": (
+                        "Actual Shooter takes a right-footed shot from the center of the box, "
+                        "but Away Keeper saves it in the center of the goal."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 33,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 1100)
+
+        self.assertEqual(event["player"], "Actual Shooter")
+        self.assertEqual(event["player_id"], 10)
+        self.assertEqual(event["team_id"], 1)
+        self.assertTrue(event["is_home"])
+        self.assertEqual(event["detail"]["provider_actor_player_name"], "Away Keeper")
+        self.assertEqual(event["detail"]["outcome_player_name"], "Away Keeper")
+        self.assertEqual(event["spatial"]["kind"], "shot_on_target")
+
+    def test_blocker_provider_actor_does_not_become_shooter(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Actual Shooter",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                },
+                {
+                    "player_id": 25,
+                    "name": "Away Defender",
+                    "team_id": 2,
+                    "team_name": "Away",
+                    "team_location": "away",
+                    "jersey_number": 5,
+                    "position_id": 25,
+                    "formation_field": "2:2",
+                    "formation_position": 4,
+                    "match_stats": [],
+                },
+            ],
+            "events": [
+                {
+                    "id": 1200,
+                    "minute": 40,
+                    "period_id": 100,
+                    "type": "Shot On Target",
+                    "text": "Shot On Target",
+                    "team_id": 2,
+                    "player_id": 25,
+                    "player": "Away Defender",
+                    "is_home": False,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 5200,
+                    "minute": 40,
+                    "comment": (
+                        "Actual Shooter takes a left-footed shot from the center of the box, "
+                        "but it is blocked by Away Defender."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 40,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 1200)
+
+        self.assertEqual(event["player"], "Actual Shooter")
+        self.assertEqual(event["team_id"], 1)
+        self.assertEqual(event["display_type"], "Blocked Shot")
+        self.assertEqual(event["spatial"]["kind"], "blocked_shot")
+        self.assertEqual(event["detail"]["outcome_player_name"], "Away Defender")
+        self.assertEqual(event["spatial"]["outcome_marker"]["kind"], "block")
+        self.assertLess(event["spatial"]["ball_path"]["end"]["x"], 100.0)
+
+    def test_true_crossbar_event_stays_woodwork_and_hits_frame(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {
+                    "player_id": 10,
+                    "name": "Shooter",
+                    "team_id": 1,
+                    "team_name": "Home",
+                    "team_location": "home",
+                    "jersey_number": 9,
+                    "position_id": 27,
+                    "formation_field": "4:2",
+                    "formation_position": 9,
+                    "match_stats": [],
+                }
+            ],
+            "events": [
+                {
+                    "id": 1300,
+                    "minute": 50,
+                    "period_id": 200,
+                    "type": "Woodwork",
+                    "text": "1st Woodwork",
+                    "team_id": 1,
+                    "player_id": 10,
+                    "player": "Shooter",
+                    "is_home": True,
+                    "detail": {},
+                }
+            ],
+            "timeline": [],
+            "commentary": [
+                {
+                    "id": 5300,
+                    "minute": 50,
+                    "comment": (
+                        "Shooter takes a right-footed shot from outside the box and hits the crossbar."
+                    ),
+                    "is_goal": False,
+                    "is_important": True,
+                    "sort_order": 50,
+                }
+            ],
+            "trends": [],
+            "ball_coordinates": [],
+            "video_events": [],
+        }
+
+        event = next(item for item in _selectable_events(game) if item.get("id") == 1300)
+
+        self.assertEqual(event["spatial"]["kind"], "woodwork")
+        self.assertEqual(event["display_type"], "Woodwork")
+        self.assertEqual(event["detail"]["frame_contact"], "crossbar")
+        self.assertEqual(event["detail"]["goal_height_ratio"], 1.0)
+        self.assertEqual(event["spatial"]["ball_path"]["end"]["x"], 0.0)
+
     def test_event_minute_13_maps_to_12xx_ball_timer_window(self):
         game = {
             "home_team": {"id": 1, "name": "Home"},
