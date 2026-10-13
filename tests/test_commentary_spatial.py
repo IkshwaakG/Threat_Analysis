@@ -2,6 +2,7 @@
 import unittest
 
 from goodgame.commentary_replays import commentary_simulations
+from goodgame.commentary_spatial import _zone
 from goodgame.web import _selectable_events
 
 
@@ -35,6 +36,24 @@ def replays(game):
 
 
 class CommentarySpatialTests(unittest.TestCase):
+    def test_outer_penalty_area_is_distinct_from_small_six_yard_area(self):
+        # Standard 105m pitch: large box depth 16.5m (~15.7%),
+        # goal area depth 5.5m (~5.2%). Coordinates must preserve this.
+        large = _zone("from inside the penalty area", 100)
+        small = _zone("from the right side of the six-yard box", 100)
+        close = _zone("close-range header", 0)
+        self.assertIsNotNone(large)
+        self.assertIsNotNone(small)
+        self.assertIsNotNone(close)
+        self.assertGreater(large["x"], 84.0)
+        self.assertLess(large["x"], 95.0)
+        self.assertGreater(small["x"], 94.0)
+        self.assertLess(small["x"], 100.0)
+        self.assertGreater(small["y"], 50.0)
+        self.assertLess(small["y"], 63.5)
+        self.assertGreater(close["x"], 5.0)
+        self.assertLess(close["x"], 15.7)
+
     def test_shooter_zone_is_distinct_from_assisters_right_wing(self):
         game = game_with(commentary=[
             {"id": 111, "minute": 25, "sort_order": 11,
