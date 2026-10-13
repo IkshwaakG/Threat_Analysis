@@ -503,6 +503,91 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, dict)
     ]
 
+    def _clock_number(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _commentary_order(item: dict[str, Any]) -> tuple[int, int, int, int]:
+        # Sort by actual match clock, then the provider's within-fixture
+        # commentary order. Same minute can contain several distinct plays.
+        return (
+            _clock_number(item.get("minute"), 999),
+            _clock_number(item.get("extra_minute")),
+            _clock_number(item.get("sort_order", item.get("order")), 999999),
+            _clock_number(item.get("id")),
+        )
+
+    commentary_rows.sort(key=_commentary_order)
+
+    def _commentary_penalty_step(comment: dict[str, Any]) -> dict[str, Any] | None:
+        message = " ".join(str(comment.get("comment") or "").split())
+        lower = message.casefold()
+        if not message or "penalty" not in lower:
+            return None
+
+        if "var" in lower and any(
+            token in lower for token in ("review", "check", "potential")
+        ):
+            kind, label = "review", "VAR penalty review"
+        elif any(phrase in lower for phrase in (
+            "penalty awarded", "awarded a penalty", "penalty given to",
+        )):
+            kind, label = "award", "Penalty awarded"
+        elif any(phrase in lower for phrase in (
+            "given away a penalty", "conceded a penalty",
+            "concedes a penalty", "gives away a penalty",
+        )):
+            kind, label = "conceded", "Penalty conceded"
+        else:
+            return None
+
+        home_name = str(game.get("home_team", {}).get("name") or "").casefold()
+        away_name = str(game.get("away_team", {}).get("name") or "").casefold()
+        beneficiary = None
+        if kind in {"award", "review"}:
+            for side_name, name in (("home", home_name), ("away", away_name)):
+                if name and any(
+                    f"{phrase} {name}" in lower for phrase in (
+                        "to", "for",
+                    )
+                ):
+                    beneficiary = side_name
+        else:
+            for side_name, name in (("home", home_name), ("away", away_name)):
+                if name and name in lower:
+                    beneficiary = "away" if side_name == "home" else "home"
+
+        if beneficiary is None:
+            return None
+        matched_names = [
+            (lower.find(str(player.get("name") or "").strip().casefold()),
+             str(player.get("name") or "").strip())
+            for player in game.get("players", []) or []
+            if isinstance(player, dict) and str(player.get("name") or "").strip()
+            and str(player.get("name") or "").strip().casefold() in lower
+        ]
+        matched_names.sort(key=lambda entry: entry[0])
+        actor = matched_names[0][1] if matched_names else None
+        return {
+            "kind": kind,
+            "label": label,
+            "minute": comment.get("minute"),
+            "extra_minute": comment.get("extra_minute"),
+            "sort_order": comment.get("sort_order", comment.get("order")),
+            "commentary_id": comment.get("id"),
+            "actor_name": actor,
+            "team_side": beneficiary,
+            "commentary": message,
+            "evidence": "provider_commentary",
+        }
+
+    penalty_commentary_steps = [
+        step for comment in commentary_rows
+        if (step := _commentary_penalty_step(comment)) is not None
+    ]
+
     trends_value = game.get("trends") or []
     if isinstance(trends_value, str):
         try:
@@ -807,6 +892,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             action_kind = commentary_action_kind(comment)
             minute_delta = abs(comment_minute - minute)
+            # Distinct stoppage-time minutes must never share the same shot
+            # description. Unknown extras are resolved only with actor/type
+            # evidence; they are not silently treated as 45+0.
+            event_extra = item.get("extra_minute")
+            comment_extra = comment.get("extra_minute")
+            if event_extra is not None and comment_extra is not None:
+                if _clock_number(event_extra) != _clock_number(comment_extra):
+                    continue
             if kind == "woodwork":
                 # A separately reported woodwork milestone is NOT the same
                 # attempt as a saved shot in that minute. Only attach text
@@ -921,7 +1014,13 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             elif kind in SHOT_LIKE_KINDS and action_kind in SHOT_LIKE_KINDS:
                 score -= 2
 
-            candidates.append((score, int(comment.get("sort_order") or 999999), comment))
+            if event_extra is not None and comment_extra is not None:
+                score -= 12  # Exact injury-time clock outranks token overlap.
+            candidates.append((
+                score,
+                _clock_number(comment.get("sort_order", comment.get("order")), 999999),
+                comment,
+            ))
 
         return min(candidates, key=lambda row: (row[0], row[1]))[2] if candidates else None
 
@@ -2537,6 +2636,22 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
                 item["commentary_id"] = matched_commentary.get("id")
                 item["commentary_text"] = comment_text
+                detail["commentary_provenance"] = {
+                    "commentary_id": matched_commentary.get("id"),
+                    "minute": matched_commentary.get("minute"),
+                    "extra_minute": matched_commentary.get("extra_minute"),
+                    "sort_order": matched_commentary.get(
+                        "sort_order", matched_commentary.get("order")
+                    ),
+                }
+                # A statistical timeline row may lack stoppage-time fields.
+                # If the text is matched confidently, preserve its clock
+                # for sorting, display and subsequent event reconciliation.
+                if item.get("extra_minute") is None and matched_commentary.get("extra_minute") is not None:
+                    item["extra_minute"] = matched_commentary["extra_minute"]
+                    detail["clock_source"] = "matched_commentary"
+                if item.get("sort_order") is None and matched_commentary.get("sort_order") is not None:
+                    item["sort_order"] = matched_commentary["sort_order"]
             item["detail"] = detail
 
             team_side = side(item)
