@@ -1980,23 +1980,111 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             if player is not None else None
         )
         if kind == "woodwork":
-            # Aggregate WOODWORK timelines can identify the shooter without
-            # indicating which post/bar was contacted or any shot coordinates.
-            # Never invent a precise impact point or turn it into a goal.
+            # The timeline establishes that the ball hit the goal frame, but
+            # does not establish its flight, height, or which part was struck.
+            # This replay is deliberately marked illustrative, even when a
+            # matched commentary row identifies the post/crossbar.
+            contact_text = " ".join(str(
+                context.get("commentary") or item.get("commentary_text") or ""
+            ).casefold().split())
+            contact_kind = "crossbar"
+            contact_source = "illustrative"
+            if re.search(r"\\b(?:crossbar|(?:the |goal )?bar)\\b", contact_text) and re.search(
+                r"\\b(?:hits?|strikes?|clips?|off|against)\\b", contact_text
+            ):
+                contact_kind = "crossbar"
+                contact_source = "commentary"
+            elif re.search(r"\\b(?:post|upright)\\b", contact_text) and re.search(
+                r"\\b(?:hits?|strikes?|clips?|off|against)\\b", contact_text
+            ):
+                contact_kind = (
+                    "left_post" if re.search(r"\\bleft\\s+(?:hand\\s+)?(?:post|upright)\\b", contact_text)
+                    else "right_post" if re.search(r"\\bright\\s+(?:hand\\s+)?(?:post|upright)\\b", contact_text)
+                    else "post"
+                )
+                contact_source = "commentary"
+
+            target_x = attacking_x(item, team_side, 100.0, 0.0)
+            # Without team ownership, don't guess which goal was attacked.
+            if target_x == 50.0:
+                return {
+                    "kind": "woodwork",
+                    "source": "outcome_only",
+                    "anchor": player_anchor,
+                    "ball_path": None,
+                    "highlight_player_id": item.get("player_id"),
+                    "contact_location": "unknown",
+                }
+
+            direction = 1.0 if target_x > 50.0 else -1.0
             launch = (
                 semantic_shot_start(item, team_side, context)
                 or player_position_anchor(item, item.get("player_id"))
                 or fixture_role_anchor(item, item.get("player_id"), "shooter")
             )
-            target_x = attacking_x(item, team_side, 100.0, 0.0)
+            if launch is None:
+                launch = {
+                    "x": target_x - direction * 24.0,
+                    "y": 50.0,
+                }
+            # Real posts are at ±(7.32m/2) on a 68m-wide field; leave
+            # enough clearance for the animated ball's radius.
+            half_goal_width = GOAL_HALF_WIDTH_PERCENT
+            if contact_kind == "left_post":
+                contact_y = 50.0 - half_goal_width + 0.6
+            elif contact_kind == "right_post":
+                contact_y = 50.0 + half_goal_width - 0.6
+            elif contact_kind == "post":
+                # A post is confirmed, but its side is not: draw a neutral
+                # illustrative choice rather than asserting a factual side.
+                contact_y = 50.0 + half_goal_width - 0.6
+            else:
+                contact_y = 50.0
+
+            impact = {
+                "x": round(target_x - direction * 0.8, 3),
+                "y": round(contact_y, 3),
+            }
+            lateral = -1.0 if contact_y > 50.0 else 1.0
+            if abs(contact_y - 50.0) < 0.5:
+                lateral = 1.0
+            rebound = {
+                "x": round(target_x - direction * 12.0, 3),
+                "y": round(max(2.0, min(98.0, contact_y + lateral * 5.0)), 3),
+            }
+            landing = {
+                "x": round(target_x - direction * 20.0, 3),
+                "y": round(max(2.0, min(98.0, rebound["y"] + lateral * 5.0)), 3),
+            }
+            start = {
+                "x": round(float(launch["x"]), 3),
+                "y": round(float(launch["y"]), 3),
+            }
+            track = [start, impact, rebound, landing]
             return {
                 "kind": "woodwork",
-                "source": "outcome_only",
-                "anchor": launch,
-                "ball_path": None,
+                "source": "illustrative_reconstruction",
+                "anchor": start,
+                "ball_track": track,
+                "ball_path": {"start": start, "end": landing},
+                "shot_start_index": 0,
+                "phases": [
+                    {"kind": "shot", "start_index": 0, "end_index": 1},
+                    {"kind": "rebound", "start_index": 1, "end_index": 3},
+                ],
                 "highlight_player_id": item.get("player_id"),
-                "shot_actor_anchor": launch,
-                "contact_location": "unknown",
+                "shot_actor_anchor": start,
+                "contact_location": contact_kind if contact_source == "commentary" else "unknown",
+                "woodwork_contact": {
+                    "kind": contact_kind,
+                    "index": 1,
+                    "source": contact_source,
+                },
+                "reconstruction_note": (
+                    "Illustrative rebound - exact contact point unknown"
+                    if contact_source != "commentary"
+                    else "Illustrative trajectory - frame contact described in commentary"
+                ),
                 "target_goal_x": target_x,
             }
         stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
