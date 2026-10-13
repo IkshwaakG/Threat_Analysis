@@ -2139,32 +2139,78 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                         detail[key] = value
 
                 if kind in ATTEMPT_KINDS:
-                    if not item.get("player") or item.get("player_id") is None:
-                        shooter = commentary_player_for_role(comment_text, "shooter")
-                        if shooter is not None:
-                            item["player_id"] = shooter.get("player_id")
-                            item["player"] = shooter.get("name")
+                    shooter = commentary_player_for_role(comment_text, "shooter")
+                    defensive_actor = commentary_defensive_player(comment_text)
+                    structured_actor = player_for(item)
+                    structured_is_goalkeeper = bool(
+                        structured_actor
+                        and str(structured_actor.get("role") or "").casefold() == "goalkeeper"
+                    )
+                    structured_is_defensive_actor = bool(
+                        defensive_actor
+                        and item.get("player_id") is not None
+                        and str(defensive_actor.get("player_id")) == str(item.get("player_id"))
+                    )
 
-                    if (
-                        not item.get("related_player_name")
-                        and item.get("related_player_id") is None
+                    should_replace_shooter = bool(
+                        shooter
                         and (
-                            comment_context.get("assist_type")
-                            or "assist" in comment_text.casefold()
+                            not item.get("player")
+                            or item.get("player_id") is None
+                            or structured_is_defensive_actor
+                            or (
+                                structured_is_goalkeeper
+                                and str(shooter.get("player_id")) != str(item.get("player_id"))
+                            )
                         )
-                    ):
+                    )
+                    if should_replace_shooter and shooter is not None:
+                        if item.get("player_id") is not None or item.get("player"):
+                            detail["provider_actor_player_id"] = item.get("player_id")
+                            detail["provider_actor_player_name"] = item.get("player")
+                        item["player_id"] = shooter.get("player_id")
+                        item["player"] = shooter.get("name")
+                        if shooter.get("team_id") is not None:
+                            item["team_id"] = shooter.get("team_id")
+                        if shooter.get("team_location") == "home":
+                            item["is_home"] = True
+                        elif shooter.get("team_location") == "away":
+                            item["is_home"] = False
+
+                    if defensive_actor is not None:
+                        detail["outcome_player_id"] = defensive_actor.get("player_id")
+                        detail["outcome_player_name"] = defensive_actor.get("name")
+                        detail["outcome_player_role"] = (
+                            "Goalkeeper"
+                            if int(defensive_actor.get("position_id") or 0) == 24
+                            else "Defender"
+                        )
+
+                    if comment_context.get("assist_type") or "assist" in comment_text.casefold():
                         assister = commentary_player_for_role(
                             comment_text,
                             "assist",
                             exclude_player_id=item.get("player_id"),
                         )
                         if assister is not None:
+                            if (
+                                item.get("related_player_id") is not None
+                                and str(item.get("related_player_id")) != str(assister.get("player_id"))
+                            ):
+                                detail["provider_related_player_id"] = item.get("related_player_id")
+                                detail["provider_related_player_name"] = item.get("related_player_name")
                             item["related_player_id"] = assister.get("player_id")
                             item["related_player_name"] = assister.get("name")
 
                 item["commentary_id"] = matched_commentary.get("id")
                 item["commentary_text"] = comment_text
             item["detail"] = detail
+
+            team_side = side(item)
+            if team_side == "home":
+                item["is_home"] = True
+            elif team_side == "away":
+                item["is_home"] = False
 
             semantic_kind = semantic_kind_from_comment(
                 kind,
@@ -2355,6 +2401,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     item["assist"] = assist
             elif kind == "shot_on_target":
                 item["display_type"] = "Shot On Target"
+            elif kind == "blocked_shot":
+                item["display_type"] = "Blocked Shot"
+            elif kind == "woodwork":
+                item["display_type"] = "Woodwork"
             elif kind == "shot_off_target":
                 item["display_type"] = "Shot Off Target"
             elif kind == "shot":
@@ -2595,13 +2645,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     # The real fixture payload can expose a saved shot simultaneously as raw
     # Shot On Target and Shot Off Target rows; both then attach to the same
     # commentary. One real-world attempt must produce one selectable event.
-    attempt_kinds = {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"}
+    attempt_kinds = ATTEMPT_KINDS
     semantic_priority = {
-        "goal": 6,
-        "penalty": 5,
-        "shot_on_target": 4,
-        "shot_off_target": 3,
-        "shot": 2,
+        "goal": 7,
+        "penalty": 6,
+        "shot_on_target": 5,
+        "woodwork": 4,
+        "blocked_shot": 3,
+        "shot_off_target": 2,
+        "shot": 1,
     }
 
     grouped_attempts: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -2615,9 +2667,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         actor_key = event.get("player_id") or str(event.get("player") or "").strip().casefold()
         evidence_key = (
-            event.get("team_id"),
-            actor_key,
-            str(commentary_id) if commentary_id is not None else commentary_text,
+            ("commentary", event.get("team_id"), str(commentary_id))
+            if commentary_id is not None
+            else ("text", event.get("team_id"), actor_key, commentary_text)
         )
         grouped_attempts.setdefault(evidence_key, []).append(event)
 
