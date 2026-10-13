@@ -891,6 +891,11 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         ).strip().casefold()
         candidates: list[tuple[int, int, dict[str, Any]]] = []
         for comment in commentary_rows:
+            source_id = item.get("source_commentary_id")
+            if source_id is not None and str(source_id) != str(comment.get("id")):
+                # A synthesized narrative action belongs to exactly one
+                # ordered comment, not another action in the same minute.
+                continue
             try:
                 comment_minute = int(comment.get("minute"))
             except (TypeError, ValueError):
