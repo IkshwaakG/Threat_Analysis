@@ -964,6 +964,132 @@ class GoodGameWebTests(unittest.TestCase):
         event = _selectable_events(game)[0]
         self.assertNotEqual((event["detail"] or {}).get("situation"), "Penalty")
 
+    def test_stoppage_time_and_provider_order_disambiguate_two_shots(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 11, "name": "First Shooter", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 12, "name": "Second Shooter", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 8001, "minute": 45, "extra_minute": 1,
+                 "team_id": 14, "player_id": 11,
+                 "type": "Shot Off Target", "text": "Shot Off Target"},
+                {"id": 8002, "minute": 45, "extra_minute": 3,
+                 "team_id": 14, "player_id": 12,
+                 "type": "Shot Off Target", "text": "Shot Off Target"},
+            ],
+            # Deliberately reversed input order.
+            "commentary": [
+                {"id": 9002, "minute": 45, "extra_minute": 3,
+                 "sort_order": 22,
+                 "comment": "Second Shooter takes a right-footed shot but misses."},
+                {"id": 9001, "minute": 45, "extra_minute": 1,
+                 "sort_order": 18,
+                 "comment": "First Shooter takes a left-footed shot but misses."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        shots = [e for e in events if e.get("id") in {8001, 8002}]
+        self.assertEqual([e["id"] for e in shots], [8001, 8002])
+        self.assertEqual([e["commentary_id"] for e in shots], [9001, 9002])
+        self.assertEqual([e["extra_minute"] for e in shots], [1, 3])
+        self.assertEqual(shots[0]["detail"]["body_part"], "Left foot")
+        self.assertEqual(shots[1]["detail"]["body_part"], "Right foot")
+        self.assertEqual(shots[0]["detail"]["commentary_provenance"]["sort_order"], 18)
+        self.assertEqual(shots[1]["detail"]["commentary_provenance"]["extra_minute"], 3)
+
+    def test_unclocked_timeline_shot_inherits_confirmed_commentary_stoppage(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 11, "name": "First Shooter", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 8003, "minute": 45, "team_id": 14,
+                 "player_id": 11, "type": "Shot",
+                 "text": "Shot"},
+            ],
+            "commentary": [
+                {"id": 9003, "minute": 45, "extra_minute": 2,
+                 "sort_order": 46,
+                 "comment": "First Shooter takes a left-footed shot from outside the area."},
+            ],
+            "ball_coordinates": [],
+        }
+        event = _selectable_events(game)[0]
+        self.assertEqual(event["extra_minute"], 2)
+        self.assertEqual(event["detail"]["clock_source"], "matched_commentary")
+        self.assertEqual(event["commentary_id"], 9003)
+
+    def test_provider_penalty_commentary_builds_ordered_award_concede_review(self):
+        game = {
+            "home_team": {"id": 14, "name": "Manchester United"},
+            "away_team": {"id": 3, "name": "Sunderland"},
+            "players": [
+                {"player_id": 11, "name": "Bruno Fernandes",
+                 "team_id": 14, "team_location": "home", "position_id": 26},
+                {"player_id": 12, "name": "Trai Hume",
+                 "team_id": 3, "team_location": "away", "position_id": 25},
+                {"player_id": 13, "name": "Benjamin Sesko",
+                 "team_id": 14, "team_location": "home", "position_id": 27},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 8004, "minute": 45, "extra_minute": 1,
+                 "team_id": 14, "player_id": 11,
+                 "type": "Shot", "text": "Shot"},
+                {"id": 8005, "minute": 45, "team_id": 3,
+                 "player_id": 12, "type": "Penalty Cancelled",
+                 "text": "Penalty disallowed"},
+            ],
+            "commentary": [
+                {"id": 9103, "minute": 45, "extra_minute": 7,
+                 "sort_order": 50,
+                 "comment": "VAR Review: Potential Penalty for Sunderland."},
+                {"id": 9102, "minute": 45, "extra_minute": 5,
+                 "sort_order": 49,
+                 "comment": "Benjamin Sesko of Manchester United has given away a penalty due to a foul inside the box."},
+                {"id": 9101, "minute": 45, "extra_minute": 3,
+                 "sort_order": 48,
+                 "comment": "Penalty awarded to Sunderland! Trai Hume is brought down inside the box."},
+                {"id": 9100, "minute": 45, "extra_minute": 1,
+                 "sort_order": 45,
+                 "comment": "Bruno Fernandes takes a blocked right-footed shot."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        self.assertEqual(len(events), 2)
+        shot = next(e for e in events if e["id"] == 8004)
+        decision = next(e for e in events if e["id"] == 8005)
+        self.assertEqual(shot.get("commentary_id"), 9100)
+        self.assertNotIn("ordered_commentary_steps", shot["detail"])
+        steps = decision["detail"]["ordered_commentary_steps"]
+        self.assertEqual([s["kind"] for s in steps], ["award", "conceded", "review"])
+        self.assertEqual([s["extra_minute"] for s in steps], [3, 5, 7])
+        self.assertEqual(decision["detail"]["commentary_step_ids"], [9101, 9102, 9103])
+        self.assertEqual(
+            [p["kind"] for p in decision["detail"]["event_sequence"]],
+            ["award", "conceded", "review", "decision"],
+        )
+        self.assertEqual(
+            [p.get("extra_minute") for p in decision["detail"]["event_sequence"][:3]],
+            [3, 5, 7],
+        )
+        self.assertEqual(steps[0]["actor_name"], "Trai Hume")
+        self.assertEqual(steps[1]["actor_name"], "Benjamin Sesko")
+        self.assertEqual(decision["spatial"]["source"], "decision_only")
+        self.assertEqual(decision["spatial"]["ball_track"], [])
+
     def test_distinct_same_minute_attack_var_corner_and_header(self):
         # Four real football actions share minute 45 and must not collapse.
         # The cancelled penalty is a separate challenge, not a block by Hume.
