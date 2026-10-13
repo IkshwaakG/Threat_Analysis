@@ -3853,23 +3853,45 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         detail["event_sequence"] = sequence
         event["detail"] = detail
 
-    def _event_chronology_key(item: dict[str, Any]) -> tuple[int, int, int, int]:
+    event_by_id = {
+        str(event["id"]): event
+        for event in merged if event.get("id") is not None
+    }
+
+    def _event_chronology_key(
+        item: dict[str, Any], visited: frozenset[str] = frozenset(),
+    ) -> tuple[int, int, int, int]:
         detail = item.get("detail") or {}
         commentary_steps = detail.get("ordered_commentary_steps") or []
-        # An unclocked cancellation cannot precede a VAR review we KNOW
-        # happened later. Sort it after its last confirmed commentary step,
-        # without fabricating an exact penalty-cancellation clock time.
+        # Use the last known review clock as a lower bound for an undated
+        # decision. Don't claim to know its exact cancellation time.
         latest_step = commentary_steps[-1] if commentary_steps else {}
         extra = item.get("extra_minute")
+        order = item.get("sort_order")
         if extra is None and latest_step.get("extra_minute") is not None:
             extra = latest_step["extra_minute"]
-        order = item.get("sort_order")
-        if (
-            commentary_steps
-            and latest_step.get("sort_order") is not None
-            and item.get("extra_minute") is None
-        ):
-            order = _clock_number(latest_step["sort_order"]) + 1
+            if latest_step.get("sort_order") is not None:
+                order = _clock_number(latest_step["sort_order"]) + 1
+
+        # An unclocked corner/header explicitly LINKED as a following action
+        # cannot sort before its predecessor's documented VAR review. This
+        # changes display order only, never the original event timestamp.
+        item_id = str(item.get("id") or "")
+        predecessor_id = (
+            detail.get("preceded_by_penalty_decision_event_id")
+            or detail.get("preceded_by_corner_event_id")
+        )
+        if extra is None and predecessor_id is not None and item_id not in visited:
+            predecessor = event_by_id.get(str(predecessor_id))
+            if predecessor is not None and predecessor.get("minute") == item.get("minute"):
+                prev_key = _event_chronology_key(
+                    predecessor, visited | {item_id},
+                )
+                extra = prev_key[1]
+                order = max(
+                    _clock_number(order, 0), prev_key[2] + 1,
+                )
+
         return (
             _clock_number(item.get("minute"), 999),
             _clock_number(extra),
@@ -4347,3 +4369,5 @@ if _STATIC_INDEX.is_file():
         if candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(_STATIC_INDEX)
+
+# CI-only validation of linked VAR restart ordering.
