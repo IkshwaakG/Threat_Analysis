@@ -146,6 +146,7 @@ def commentary_simulations(
             row_id = -1000000000 - index
         added.append({
             "id": row_id,
+            "source_commentary_id": identifier,
             "minute": comment["minute"],
             "extra_minute": comment.get("extra_minute"),
             "sort_order": comment.get("sort_order"),
