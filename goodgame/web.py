@@ -3172,6 +3172,61 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 decision.get("player") or player_name_for_id(decision["player_id"])
             )
         shot["detail"] = detail
+
+        # The decision's named participant can identify who blocked the
+        # shot when commentary says only "blocked", without a defender name.
+        # Never reassign an explicitly named saver/blocker. The opposing
+        # team, actual lineup player, and confirmed blocked-shot outcome
+        # must all agree; no fixture/player IDs are hardcoded.
+        decision_actor = None
+        if decision.get("player_id") is not None:
+            try:
+                decision_actor = players_by_id.get(int(decision["player_id"]))
+            except (TypeError, ValueError):
+                pass
+        shot_spatial = dict(shot.get("spatial") or {})
+        if (
+            semantic_event_kind(shot) == "blocked_shot"
+            and shot_spatial.get("outcome_kind") == "block"
+            and not shot_spatial.get("outcome_actor_id")
+            and decision_actor is not None
+            and side(shot) in {"home", "away"}
+            and side(decision) in {"home", "away"}
+            and side(shot) != side(decision)
+            and decision_actor.get("team_location") == side(decision)
+            and str(decision_actor.get("player_id")) != str(shot.get("player_id"))
+            and int(decision_actor.get("position_id") or 0) == 25
+        ):
+            block_anchor = player_position_anchor(
+                shot, decision_actor.get("player_id")
+            )
+            anchor_source = "event_player_positions"
+            if block_anchor is None:
+                path = shot_spatial.get("ball_path")
+                endpoint = path.get("end") if isinstance(path, dict) else None
+                if isinstance(endpoint, dict) and all(
+                    endpoint.get(axis) is not None for axis in ("x", "y")
+                ):
+                    block_anchor = {
+                        "x": float(endpoint["x"]),
+                        "y": float(endpoint["y"]),
+                    }
+                    anchor_source = "inferred_contact_point"
+            if block_anchor is not None:
+                shot_spatial.update({
+                    "outcome_actor_id": decision_actor.get("player_id"),
+                    "outcome_actor_name": str(decision_actor.get("name") or "").strip(),
+                    "outcome_actor_role": "Defender",
+                    "outcome_actor_team": decision_actor.get("team_location"),
+                    "outcome_actor_anchor": block_anchor,
+                    "outcome_actor_anchor_source": anchor_source,
+                    "outcome_actor_identification_source": "linked_referee_decision",
+                })
+                detail["outcome_player_id"] = decision_actor.get("player_id")
+                detail["outcome_player_name"] = str(decision_actor.get("name") or "").strip()
+                detail["outcome_player_role"] = "Defender"
+                shot["spatial"] = shot_spatial
+
         administrative_context_ids.add(id(decision))
     if administrative_context_ids:
         merged = [
