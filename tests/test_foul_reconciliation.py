@@ -95,3 +95,5 @@ class FoulIncidentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI-only assertion coverage for foul reconciliation and timestamping.
