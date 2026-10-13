@@ -37,7 +37,8 @@ def _roles(comment: dict[str, Any] | None, players: list[dict[str, Any]]
         text,
     ))
     won = bool(re.search(
-        r"\b(?:earns?|wins?|won|awarded|given|draws?)\b.{0,24}\bfree kick\b"
+        r"\b(?:earns?|earned|wins?|won|awarded|given|draws?|drew)\b"
+        r".{0,36}\bfree kick\b"
         r"|\b(?:is fouled|was fouled|has been fouled)\b", text,
     ))
     foul_verb = re.search(r"\bfouls?\b|\bcommits? a foul\b", text)
