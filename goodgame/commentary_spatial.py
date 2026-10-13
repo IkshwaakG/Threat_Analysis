@@ -244,8 +244,16 @@ def enrich_replays(
                                                         "fouled by", "is fouled")):
                     actor = next((p for p in mentions
                                   if str(p["name"]).casefold() in text_lower), None)
-                elif re.search(r"\bfouls?\b", text_lower) and len(mentions) >= 2:
-                    actor = mentions[1]  # the fouled opponent, not the fouler
+                elif (match := re.search(r"\bfouls?\b", text_lower)):
+                    # Mentions are returned in lineup order, not text order.
+                    # In "Trai Hume fouls Mason Mount", the VICTIM is the
+                    # player named after the verb, regardless of squad order.
+                    following = [
+                        p for p in mentions
+                        if text_lower.find(str(p["name"]).strip().casefold()) >= match.end()
+                    ]
+                    if len(following) == 1:
+                        actor = following[0]
                 elif len(mentions) == 1:
                     actor = mentions[0]
                 if actor and actor.get("player_id") is not None:
