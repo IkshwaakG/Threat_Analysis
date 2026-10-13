@@ -310,15 +310,45 @@ def enrich_replays(
                              and str(p.get("player_id")) == str(event["related_player_id"])), None)
             if assister:
                 cross_zone = None
+                cross_source = "inferred_assist_area"
+                # If a header follows a documented corner, the next named
+                # CROSSER is near the attacking wing/byline, not midfield.
+                # Crucially: crossing after a corner is NOT evidence that
+                # this player took the original corner.
+                if re.search(r"\b(?:following|after|from) (?:a |the )?corner(?: kick)?\b",
+                             narrative.casefold()):
+                    preceding = [
+                        row for row in events
+                        if row is not event
+                        and str(row.get("team_id")) == str(event.get("team_id"))
+                        and str((row.get("spatial") or {}).get("kind")) == "corner"
+                        and 0 <= _clock(event) - _clock(row) <= 2
+                        and (
+                            event.get("period_id") is None or row.get("period_id") is None
+                            or str(event["period_id"]) == str(row["period_id"])
+                        )
+                    ]
+                    if len(preceding) == 1:
+                        corner_start = (preceding[0].get("spatial") or {}).get("ball_path") or {}
+                        point = corner_start.get("start") or {}
+                        corner_y = float(point.get("y", 50))
+                        if corner_y != 50:
+                            cross_zone = _point(
+                                target - direction * 12,
+                                18.0 if corner_y < 50 else 82.0,
+                            )
+                            cross_source = "inferred_cross_after_corner"
                 if "cross from the left" in narrative.casefold():
                     cross_zone = _zone("left wing", target)
+                    cross_source = "commentary_zone"
                 elif "cross from the right" in narrative.casefold():
                     cross_zone = _zone("right wing", target)
+                    cross_source = "commentary_zone"
                 assist_point = (cross_zone or spatial.get("assist_actor_anchor")
                                 or _point(target - direction * 34, 42))
                 spatial["assist_actor_anchor"] = place(
                     assister, "assister", assist_point,
-                    evidence="commentary_zone" if cross_zone else "inferred_assist_area",
+                    evidence=cross_source if cross_zone else "inferred_assist_area",
                 )
 
             defender = next((p for p in players if spatial.get("outcome_actor_id") is not None
@@ -435,7 +465,22 @@ def enrich_replays(
                 place(receiver, "receiver", receiver_at,
                       evidence="commentary_zone" if receiver_zone else "inferred_box_receiver")
             if taker:
-                place(taker, "corner_taker", start, evidence=wing_evidence)
+                # "Cross following a corner kick" identifies a crosser, not
+                # necessarily the original corner taker.
+                took_corner = re.search(
+                    r"\b(?:corner (?:kick )?(?:taken|delivered|swung in) by|"
+                    r"takes? (?:the|a) corner)\b",
+                    combined.casefold(),
+                )
+                if took_corner:
+                    place(taker, "corner_taker", start, evidence=wing_evidence)
+                else:
+                    crosser = _point(
+                        target - direction * 12,
+                        18.0 if y < 50 else 82.0,
+                    )
+                    place(taker, "crosser", crosser,
+                          evidence="inferred_cross_after_corner")
             track = [start, receiver_at]
             # If the linked commentary explicitly reports a header/shot and
             # a direction or save, show the actual action sequence:
@@ -534,6 +579,10 @@ def enrich_replays(
             idx = max(0, min(len(track)-1, int(spatial.get("shot_start_index") or 0)))
             if any(p["role"] == "shooter" for p in actors):
                 track[idx] = {**track[idx], **spatial["shot_actor_anchor"]}
+                if idx > 0 and spatial.get("assist_actor_anchor") and any(
+                    p["role"] == "assister" for p in actors
+                ):
+                    track[0] = {**track[0], **spatial["assist_actor_anchor"]}
                 spatial["ball_track"] = track
                 spatial["ball_path"] = {"start": track[0], "end": track[-1]}
                 event["ball_track"] = track
