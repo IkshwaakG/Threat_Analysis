@@ -1000,9 +1000,67 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(shot["detail"]["secondary_flags"], ["penalty_disallowed"])
         self.assertEqual(shot["detail"]["decision_event_ids"], [452])
         self.assertEqual(shot["detail"]["decision_player_name"], "Trai Hume")
+        self.assertEqual(shot["detail"]["outcome_player_name"], "Trai Hume")
+        self.assertEqual(shot["spatial"]["outcome_kind"], "block")
+        self.assertEqual(shot["spatial"]["outcome_actor_id"], 24816771)
+        self.assertEqual(shot["spatial"]["outcome_actor_name"], "Trai Hume")
+        self.assertEqual(shot["spatial"]["outcome_actor_role"], "Defender")
+        self.assertEqual(shot["spatial"]["outcome_actor_team"], "away")
+        self.assertEqual(shot["spatial"]["outcome_actor_identification_source"], "linked_referee_decision")
+        self.assertEqual(shot["spatial"]["outcome_actor_anchor_source"], "inferred_contact_point")
+        self.assertEqual(
+            [(phase["kind"], phase["actor_name"]) for phase in shot["detail"]["event_sequence"]],
+            [
+                ("assist", "Amad Diallo"),
+                ("shot", "Bruno Fernandes"),
+                ("block", "Trai Hume"),
+                ("review", None),
+                ("decision", None),
+            ],
+        )
         self.assertEqual(shot["related_player_name"], "Amad Diallo")
         self.assertNotEqual(shot["detail"].get("situation"), "Penalty")
         self.assertGreaterEqual(len(shot["spatial"]["ball_track"]), 2)
+
+    def test_named_commentary_blocker_beats_referee_decision_actor(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 100, "name": "Attacker", "team_id": 14,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 200, "name": "Named Blocker", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+                {"player_id": 300, "name": "Other Defender", "team_id": 3,
+                 "team_location": "away", "position_id": 25},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 9001, "minute": 45, "period_id": 500,
+                 "team_id": 14, "player_id": 100,
+                 "type": "Shot", "text": "Shot"},
+                {"id": 9002, "minute": 45, "period_id": 500,
+                 "team_id": 3, "player_id": 300,
+                 "type": "Penalty Cancelled", "text": "Penalty disallowed"},
+            ],
+            "commentary": [
+                {"id": 9003, "minute": 45, "sort_order": 1,
+                 "comment": "Attacker takes a shot that is blocked by Named Blocker."},
+            ],
+            "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["spatial"]["outcome_actor_id"], 200)
+        self.assertEqual(event["spatial"]["outcome_actor_name"], "Named Blocker")
+        self.assertEqual(event["detail"]["decision_player_name"], "Other Defender")
+        self.assertEqual(
+            event["detail"]["event_sequence"][1]["actor_name"], "Attacker"
+        )
+        self.assertEqual(
+            event["detail"]["event_sequence"][2]["actor_name"], "Named Blocker"
+        )
 
     def test_explicit_penalty_decision_commentary_stays_separate(self):
         game = {
