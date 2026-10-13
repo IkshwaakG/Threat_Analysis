@@ -268,9 +268,9 @@ def _visual_players(game: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _normalize_ball_coordinates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert Sportmonks unit-space ball samples to the API's 0..100 pitch.
+    """Convert provider unit-space ball samples to the API's 0..100 pitch.
 
-    Sportmonks can supply x/y as fractions, including minor float overshoot
+    The feed may supply x/y as fractions, including minor float overshoot
     such as -0.00999999. Decide the scale once per fixture, not per sample,
     so near-corner positions on an already normalized pitch stay intact.
     """
