@@ -744,6 +744,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             or " is saved " in f" {text} "
             or " saved by " in f" {text} "
             or "makes a save" in text
+            or " saves " in f" {text} "
             or "denied by" in text
         ):
             return "shot_on_target"
@@ -1049,6 +1050,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             ("makes a save", "saved"),
             ("make a save", "saved"),
             ("saved", "saved"),
+            ("saves", "saved"),
             ("save", "saved"),
             ("denied by", "saved"),
         )
