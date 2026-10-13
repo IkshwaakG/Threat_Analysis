@@ -933,6 +933,11 @@ class GoodGameWebTests(unittest.TestCase):
         events = _selectable_events(game)
         self.assertEqual(len(events), 3)
         for event in events:
+            if event["spatial"]["kind"] == "card":
+                self.assertEqual(event["spatial"]["source"], "decision_only")
+                self.assertEqual(event["spatial"]["ball_track"], [])
+                self.assertIsNone(event["spatial"]["ball_path"])
+                continue
             self.assertEqual(event["spatial"]["source"], "context_inferred")
             self.assertEqual(len(event["spatial"]["ball_track"]), 2)
             self.assertNotEqual(event["spatial"]["ball_track"][0],
