@@ -211,3 +211,5 @@ class CommentarySpatialTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI verification of foul-only body placement and penalty area geometry.
