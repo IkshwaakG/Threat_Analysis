@@ -120,11 +120,13 @@ def _nearby(
 ) -> tuple[dict[str, float], bool]:
     if not samples:
         return point, False
-    distances = sorted(
-        (math.hypot(sample["x"] - point["x"], sample["y"] - point["y"]), sample)
-        for sample in samples
-    )
-    distance, nearest = distances[0]
+    distance, nearest = min(
+        (
+            math.hypot(sample["x"] - point["x"], sample["y"] - point["y"]),
+            index, sample,
+        )
+        for index, sample in enumerate(samples)
+    )[0::2]
     if distance > radius:
         return point, False
     # Commentary placement leads; tracking is only a small refinement.
