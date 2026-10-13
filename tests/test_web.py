@@ -1079,7 +1079,7 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(decision["detail"]["commentary_step_ids"], [9101, 9102, 9103])
         self.assertEqual(
             [p["kind"] for p in decision["detail"]["event_sequence"]],
-            ["award", "conceded", "review", "decision"],
+            ["award", "conceded", "review", "decision", "restart"],
         )
         self.assertEqual(
             [p.get("extra_minute") for p in decision["detail"]["event_sequence"][:3]],
