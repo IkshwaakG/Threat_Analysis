@@ -281,6 +281,16 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
     PENALTY_SPOT_RIGHT_X = 100.0 - PENALTY_SPOT_FROM_GOAL_PERCENT
     PENALTY_SPOT_LEFT_X = PENALTY_SPOT_FROM_GOAL_PERCENT
 
+    SHOT_LIKE_KINDS = {
+        "shot",
+        "shot_on_target",
+        "shot_off_target",
+        "blocked_shot",
+        "woodwork",
+        "penalty",
+    }
+    ATTEMPT_KINDS = {"goal", *SHOT_LIKE_KINDS}
+
     def category(item: dict[str, Any]) -> str:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
         if "substitution" in value:
@@ -291,6 +301,10 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "card"
         if "corner" in value:
             return "corner"
+        if "woodwork" in value or "hit the post" in value or "hit the bar" in value or "crossbar" in value:
+            return "woodwork"
+        if "blocked shot" in value or "shot blocked" in value:
+            return "blocked_shot"
         if "shot on target" in value:
             return "shot_on_target"
         if "shot off target" in value:
@@ -559,6 +573,28 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             return "goal"
 
         if (
+            "hits the post" in text
+            or "hit the post" in text
+            or "off the post" in text
+            or "strikes the post" in text
+            or "hits the bar" in text
+            or "hit the bar" in text
+            or "off the bar" in text
+            or "crossbar" in text
+            or "woodwork" in text
+        ):
+            return "woodwork"
+
+        if (
+            "attempt blocked" in text
+            or "shot blocked" in text
+            or "blocked by" in text
+            or " blocks the shot" in f" {text} "
+            or " blocks the attempt" in f" {text} "
+        ):
+            return "blocked_shot"
+
+        if (
             "attempt saved" in text
             or " is saved " in f" {text} "
             or " saved by " in f" {text} "
@@ -631,13 +667,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     continue
                 if kind == "goal" and action_kind != "goal":
                     continue
-                if kind in {"shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind not in {
-                    "shot",
-                    "shot_on_target",
-                    "shot_off_target",
-                }:
+                if kind in SHOT_LIKE_KINDS and action_kind not in SHOT_LIKE_KINDS:
                     continue
-                if kind not in {"goal", "shot", "shot_on_target", "shot_off_target", "penalty"} and action_kind == "goal":
+                if kind not in ATTEMPT_KINDS and action_kind == "goal":
                     continue
 
             text = str(comment.get("comment") or "")
@@ -652,6 +684,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "goal": ("goal", "scores"),
                 "shot_off_target": ("miss", "wide", "off target"),
                 "shot_on_target": ("shot", "saved", "on target"),
+                "blocked_shot": ("blocked", "block"),
+                "woodwork": ("woodwork", "post", "bar", "crossbar"),
                 "shot": ("shot", "attempt"),
                 "corner": ("corner",),
                 "card": ("card", "booked", "yellow", "red"),
@@ -665,7 +699,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             if action_kind == kind:
                 score -= 5
-            elif kind in {"shot", "shot_on_target", "shot_off_target"} and action_kind.startswith("shot"):
+            elif kind in SHOT_LIKE_KINDS and action_kind in SHOT_LIKE_KINDS:
                 score -= 2
 
             candidates.append((score, int(comment.get("sort_order") or 999999), comment))
