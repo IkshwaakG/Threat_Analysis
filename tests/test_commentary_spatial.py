@@ -138,3 +138,5 @@ class CommentarySpatialTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI validates actor zones and connected commentary actions.
