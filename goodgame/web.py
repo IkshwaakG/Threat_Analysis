@@ -2559,7 +2559,14 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 item["trend_context"] = trend_context
 
             spatial_data = spatial(item, kind)
-            coordinate_track = event_coordinate_track(item, spatial_data, kind)
+            # Ball-coordinate samples sometimes coincide with referee actions
+            # in the same displayed minute. Do not overwrite a VAR decision's
+            # attacking-end anchor with an unrelated ball sample.
+            decision_only = kind in {"penalty_disallowed", "goal_disallowed", "card"}
+            coordinate_track = (
+                [] if decision_only
+                else event_coordinate_track(item, spatial_data, kind)
+            )
             coordinate_evidence_track = list(coordinate_track)
             shot_start_index = 0
 
