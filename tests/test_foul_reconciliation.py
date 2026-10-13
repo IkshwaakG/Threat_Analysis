@@ -110,3 +110,5 @@ class FoulIncidentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# CI only: validate committed/won fouls and location confidence.
