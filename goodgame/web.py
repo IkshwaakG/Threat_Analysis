@@ -1897,12 +1897,6 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 or fixture_role_anchor(item, item.get("player_id"), "shooter")
             )
             target_x = attacking_x(item, team_side, 100.0, 0.0)
-            marker = {
-                "kind": "woodwork",
-                "x": target_x,
-                "y": 50.0,
-                "label": "Goal frame (impact location unknown)",
-            }
             return {
                 "kind": "woodwork",
                 "source": "outcome_only",
@@ -1910,7 +1904,8 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                 "ball_path": None,
                 "highlight_player_id": item.get("player_id"),
                 "shot_actor_anchor": launch,
-                "outcome_marker": marker,
+                "contact_location": "unknown",
+                "target_goal_x": target_x,
             }
         stored_path = item.get("ball_path") if isinstance(item.get("ball_path"), dict) else None
         source = "stored" if stored_path else "inferred"
