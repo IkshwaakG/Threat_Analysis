@@ -593,7 +593,9 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             defensive = (
                 "saved by" in before
                 or "save by" in before
+                or ("saved" in before and " by " in before)
                 or "blocked by" in before
+                or ("blocked" in before and " by " in before)
                 or "denied by" in before
                 or "parried by" in before
                 or after.lstrip().startswith("saves")
@@ -1640,7 +1642,7 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             # Sparse provider fallback: choose the closest forward pair that
             # still clearly moves toward the correct goal. The first point is
             # always the shot-taking point; never return a pre-shot run.
-            if kind in {"shot", "shot_on_target", "shot_off_target", "goal", "penalty"}:
+            if kind in ATTEMPT_KINDS:
                 sparse: list[tuple[float, int, int]] = []
                 for launch_index in range(0, len(compact_rows) - 1):
                     launch_point, launch_second = compact_rows[launch_index]
@@ -1736,15 +1738,15 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
 
             selected = same_end if len(same_end) >= 2 else []
 
-        elif kind in {"goal", "shot_on_target", "penalty"}:
+        elif kind in {"goal", "shot_on_target", "woodwork", "penalty"}:
             selected = build_approach_segment(
                 on_target=True,
                 max_goal_distance=28.0,
             )
 
-        elif kind in {"shot", "shot_off_target"}:
-            # Off-target can miss wide or over the bar. With no Z coordinate,
-            # only require a meaningful approach toward the correct goal.
+        elif kind in {"shot", "shot_off_target", "blocked_shot"}:
+            # Off-target/blocked attempts may terminate before or beside the
+            # frame. Require meaningful goalward motion, not goal-line arrival.
             selected = build_approach_segment(
                 on_target=False,
                 max_goal_distance=32.0,
