@@ -3582,6 +3582,101 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         event["ball_path"] = spatial_data["ball_path"]
         event["ball_track"] = spatial_data["ball_track"]
 
+    # Ordered evidence for the whole event, not just the moving ball.
+    # Referee review/decision steps happen after the on-pitch sequence and
+    # must never be represented as a second pass, shot, or ball trajectory.
+    for event in merged:
+        detail = dict(event.get("detail") or {})
+        spatial_data = event.get("spatial") or {}
+        kind = semantic_event_kind(event)
+        sequence: list[dict[str, Any]] = []
+
+        def append_phase(
+            phase_kind: str, label: str, actor: str | None = None,
+            actor_id: Any = None, evidence: str = "event",
+            note: str | None = None,
+        ) -> None:
+            phase: dict[str, Any] = {
+                "kind": phase_kind,
+                "label": label,
+                "actor_name": actor,
+                "actor_id": actor_id,
+                "evidence": evidence,
+            }
+            if note:
+                phase["note"] = note
+            sequence.append(phase)
+
+        if kind in ATTEMPT_KINDS:
+            assister_name = (
+                event.get("related_player_name") or event.get("assist")
+            )
+            if assister_name:
+                append_phase(
+                    "assist", "Pass / assist", str(assister_name),
+                    event.get("related_player_id"), "event_and_commentary",
+                )
+            shooter_name = event.get("player") or event.get("scorer")
+            append_phase(
+                "shot", "Shot" if kind != "goal" else "Scoring attempt",
+                str(shooter_name) if shooter_name else None,
+                event.get("player_id"), "event_and_commentary",
+            )
+            outcome = spatial_data.get("outcome_kind")
+            if outcome not in {"save", "block"}:
+                outcome = (
+                    "block" if kind == "blocked_shot"
+                    else "save" if str(detail.get("shot_outcome_hint") or "").casefold() == "saved"
+                    else None
+                )
+            if outcome:
+                actor_name = (
+                    spatial_data.get("outcome_actor_name")
+                    or detail.get("outcome_player_name")
+                )
+                append_phase(
+                    outcome,
+                    "Shot blocked" if outcome == "block" else "Shot saved",
+                    str(actor_name) if actor_name else None,
+                    spatial_data.get("outcome_actor_id") or detail.get("outcome_player_id"),
+                    str(spatial_data.get("outcome_actor_identification_source") or "commentary"),
+                    (
+                        "Contact location inferred; not player-tracking data."
+                        if spatial_data.get("outcome_actor_anchor_source") == "inferred_contact_point"
+                        else None
+                    ),
+                )
+            elif kind == "goal":
+                append_phase("goal", "Goal scored", str(shooter_name) if shooter_name else None)
+            elif kind == "woodwork":
+                append_phase("woodwork", "Goal frame struck", str(shooter_name) if shooter_name else None)
+
+            if "woodwork" in detail.get("secondary_flags", []):
+                append_phase(
+                    "woodwork", "Woodwork also reported",
+                    evidence="provider_statistic",
+                    note="Frame contact cannot be independently located.",
+                )
+            if "penalty_disallowed" in detail.get("secondary_flags", []):
+                append_phase(
+                    "review", "Penalty reviewed",
+                    evidence="inferred_from_cancelled_decision",
+                    note="Review implied by the cancelled penalty annotation.",
+                )
+                append_phase(
+                    "decision", "Penalty cancelled",
+                    evidence="provider_referee_decision",
+                )
+        else:
+            append_phase(
+                kind, str(event.get("display_type") or event.get("type") or "Event"),
+                str(event.get("player") or "") or None,
+                event.get("player_id"),
+                "provider_event",
+            )
+        detail["event_sequence"] = sequence
+        event["detail"] = detail
+
     merged.sort(
         key=lambda item: (
             item.get("minute") if item.get("minute") is not None else 999,
