@@ -112,6 +112,21 @@ class CommentaryReplayTests(unittest.TestCase):
         )
         self.assertEqual(len(rows), 1)
 
+    def test_awarded_corner_belongs_to_recipient_not_named_conceding_defender(self):
+        game = fixture(commentary=[
+            {"id": 1020, "minute": 25, "sort_order": 8,
+             "comment": (
+                 "Corner awarded to Manchester United after a defensive "
+                 "play by Trai Hume of Sunderland."
+             )},
+        ])
+        rows = replays(game)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["spatial"]["kind"], "corner")
+        self.assertEqual(rows[0]["team_id"], 14)
+        self.assertIsNone(rows[0].get("player_id"))
+        self.assertEqual(rows[0]["commentary_id"], 1020)
+
     def test_unknown_team_commentary_does_not_invent_a_replay(self):
         game = fixture(commentary=[
             {"id": 1005, "minute": 37, "sort_order": 1,
