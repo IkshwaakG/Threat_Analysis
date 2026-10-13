@@ -175,11 +175,40 @@ class CommentarySpatialTests(unittest.TestCase):
         positions = foul["spatial"]["actor_positions"]
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0]["player_id"], 101)  # fouled player
-        self.assertEqual((positions[0]["x"], positions[0]["y"]), (72, 35))
+        # Commentary has no exact second. Its position in the ordered
+        # minute yields a 33:30 estimate, nearest sample 33:18.
+        self.assertEqual((positions[0]["x"], positions[0]["y"]), (71, 45))
         self.assertEqual(
             positions[0]["position_source"],
-            "minute_ball_sample_context_not_player_tracking",
+            "time_matched_ball_context_not_player_tracking",
         )
+        evidence = foul["spatial"]["foul_location_evidence"]
+        self.assertEqual(evidence["basis"], "minute_commentary_order_estimate")
+        self.assertEqual(evidence["sample_time_seconds"], 33 * 60 + 18)
+        self.assertEqual(evidence["confidence"], "low")
+
+    def test_foul_location_uses_commentary_order_within_minute(self):
+        game = game_with(commentary=[
+            {"id": 800, "minute": 27, "sort_order": 1,
+             "comment": "A substitution takes place."},
+            {"id": 801, "minute": 27, "sort_order": 2,
+             "comment": "Trai Hume fouls Mason Mount."},
+            {"id": 802, "minute": 27, "sort_order": 3,
+             "comment": "The referee signals play to restart."},
+        ], ball_coordinates=[
+            {"id": 1, "timer": "26:03", "x": .1, "y": .2},
+            {"id": 2, "timer": "26:26", "x": .76, "y": .34},
+            {"id": 3, "timer": "26:53", "x": .9, "y": .9},
+        ])
+        foul = next(e for e in replays(game) if e["spatial"]["kind"] == "foul")
+        actor = foul["spatial"]["actor_positions"][0]
+        self.assertEqual(actor["player_id"], 101)
+        self.assertEqual((actor["x"], actor["y"]), (76, 34))
+        self.assertEqual(
+            foul["spatial"]["foul_location_evidence"]["basis"],
+            "minute_commentary_order_estimate",
+        )
+        self.assertEqual(foul["spatial"]["ball_track"], [])
 
     def test_outer_penalty_box_and_close_range_header_away_from_midfield(self):
         game = game_with(commentary=[
