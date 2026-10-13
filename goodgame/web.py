@@ -2031,10 +2031,12 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
             # Real posts are at ±(7.32m/2) on a 68m-wide field; leave
             # enough clearance for the animated ball's radius.
             half_goal_width = GOAL_HALF_WIDTH_PERCENT
+            # Left/right post are named from the attacking player's view.
+            # Mirror the lateral side when attacking toward the left goal.
             if contact_kind == "left_post":
-                contact_y = 50.0 - half_goal_width + 0.6
+                contact_y = 50.0 - direction * (half_goal_width - 0.6)
             elif contact_kind == "right_post":
-                contact_y = 50.0 + half_goal_width - 0.6
+                contact_y = 50.0 + direction * (half_goal_width - 0.6)
             elif contact_kind == "post":
                 # A post is confirmed, but its side is not: draw a neutral
                 # illustrative choice rather than asserting a factual side.
