@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from goodgame.web import _selectable_events, app
+from goodgame.web import _normalize_ball_coordinates, _selectable_events, app
 
 
 class FakeServingRepository:
@@ -226,6 +226,64 @@ class FakeServingRepository:
 class GoodGameWebTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+
+    def test_fractional_ball_coordinates_normalize_without_changing_percent_samples(self):
+        fractional = [
+            {"timer": "24:01", "x": 0.9, "y": -0.00999999},
+            {"timer": "24:37", "x": 0.21, "y": 0.39},
+            {"timer": "25:01", "x": 0.21, "y": 0.39},
+            {"timer": "25:25", "x": 0.84, "y": 0.44},
+        ]
+        normalized = _normalize_ball_coordinates(fractional)
+        self.assertEqual([(row["x"], row["y"]) for row in normalized],
+                         [(90.0, 0.0), (21.0, 39.0), (21.0, 39.0), (84.0, 44.0)])
+        percent = [
+            {"x": 0.5, "y": 0.7}, {"x": 60.0, "y": 48.0},
+            {"x": 83.0, "y": 49.0}, {"x": 99.0, "y": 50.0},
+        ]
+        self.assertEqual(_normalize_ball_coordinates(percent), percent)
+
+    def test_woodwork_is_not_misclassified_as_saved_shot_or_goal(self):
+        game = {
+            "home_team": {"id": 14, "name": "Home"},
+            "away_team": {"id": 3, "name": "Away"},
+            "players": [
+                {"player_id": 129602, "name": "Bruno Fernandes",
+                 "team_id": 14, "team_location": "home", "position_id": 26,
+                 "formation_field": "3:3"},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 157072715, "minute": 25, "period_id": 12,
+                 "team_id": 14, "player_id": 129602,
+                 "type": "Woodwork", "text": "1st Woodwork"},
+                {"id": 151643202, "minute": 25, "period_id": 12,
+                 "team_id": 14, "type": "Shot On Target",
+                 "text": "4th Shot On Target"},
+            ],
+            "commentary": [
+                {"id": 9556084, "minute": 25, "sort_order": 20,
+                 "comment": "Bruno Fernandes takes a right-footed shot from outside the penalty area. The attempt is saved in the top right corner by Robin Roefs, assisted by Mason Mount.",
+                 "is_goal": False},
+            ],
+            "ball_coordinates": [
+                {"id": 1, "period_id": 12, "timer": "24:01", "x": 0.9, "y": -0.00999999},
+                {"id": 2, "period_id": 12, "timer": "24:37", "x": 0.21, "y": 0.39},
+                {"id": 3, "period_id": 12, "timer": "24:55", "x": 0.21, "y": 0.39},
+                {"id": 4, "period_id": 12, "timer": "25:25", "x": 0.84, "y": 0.44},
+            ],
+        }
+        events = _selectable_events(game)
+        woodwork = next(event for event in events if event["id"] == 157072715)
+        self.assertEqual(woodwork["spatial"]["kind"], "woodwork")
+        self.assertEqual(woodwork["display_type"], "Woodwork")
+        self.assertIsNone(woodwork["spatial"]["ball_path"])
+        self.assertEqual(woodwork["spatial"]["contact_location"], "unknown")
+        self.assertIsNone(woodwork.get("commentary_id"))
+        self.assertNotEqual(woodwork["spatial"]["source"], "stored")
+        shot = next(event for event in events if event["id"] == 151643202)
+        self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
+        self.assertEqual(shot.get("commentary_id"), 9556084)
 
     def test_video_cv_replaces_geometry_but_not_event_semantics(self):
         game = {
