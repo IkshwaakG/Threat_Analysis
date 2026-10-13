@@ -1096,14 +1096,24 @@ class GoodGameWebTests(unittest.TestCase):
             ],
             "events": [],
             "timeline": [
-                {"id": 401, "minute": 45, "team_id": 3, "player_id": 20,
+                {"id": 401, "minute": 45, "period_id": 11,
+                 "team_id": 3, "player_id": 20,
                  "type": "Penalty Cancelled", "text": "Penalty disallowed"},
-                {"id": 402, "minute": 46, "team_id": 3, "player_id": 20,
+                {"id": 402, "minute": 46, "period_id": 12,
+                 "team_id": 3, "player_id": 20,
                  "type": "Penalty Cancelled", "text": "Penalty disallowed"},
-                {"id": 403, "minute": 45, "team_id": 14,
+                {"id": 403, "minute": 45, "period_id": 11, "team_id": 14,
                  "type": "Penalty Cancelled", "text": "Penalty disallowed"},
             ],
-            "commentary": [], "ball_coordinates": [],
+            "commentary": [],
+            # Ball elsewhere in the same minute must NOT relocate a VAR
+            # review into the wrong half or fabricate a shot.
+            "ball_coordinates": [
+                {"id": 1, "period_id": 11, "timer": "44:46", "x": 84, "y": 64},
+                {"id": 2, "period_id": 11, "timer": "44:55", "x": 86, "y": 65},
+                {"id": 3, "period_id": 11, "timer": "45:00", "x": 88, "y": 65},
+                {"id": 4, "period_id": 12, "timer": "46:00", "x": 30, "y": 46},
+            ],
         }
         events = _selectable_events(game)
         by_id = {row["id"]: row for row in events}
