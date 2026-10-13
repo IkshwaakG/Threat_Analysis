@@ -333,6 +333,18 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         value = f"{item.get('type') or ''} {item.get('text') or ''}".casefold()
         if "substitution" in value:
             return "substitution"
+        # Referee/VAR decisions are metadata, not scored goals or attempted
+        # penalty kicks. Handle them before the generic goal/penalty tokens.
+        if "penalty" in value and any(
+            phrase in value
+            for phrase in ("disallow", "cancel", "overturn", "rescinded", "withdrawn")
+        ):
+            return "penalty_disallowed"
+        if re.search(r"\\bgoal\\b", value) and any(
+            phrase in value
+            for phrase in ("disallow", "cancel", "overturn", "ruled out")
+        ):
+            return "goal_disallowed"
         # "goalkeeper" is not a goal, and WOODWORK is not a scored attempt.
         if re.search(r"\bgoal\b", value):
             return "goal"
@@ -808,6 +820,21 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 ):
                     continue
+            elif kind in {"penalty_disallowed", "goal_disallowed"}:
+                # This is an administrative decision, not the attack itself.
+                # Never borrow an unrelated blocked/saved shot commentary just
+                # because it shares the same clock minute.
+                if comment_minute != minute:
+                    continue
+                decision_text = str(comment.get("comment") or "").casefold()
+                if (
+                    ("penalty" not in decision_text if kind == "penalty_disallowed"
+                     else "goal" not in decision_text)
+                    or not any(verb in decision_text for verb in (
+                        "disallow", "cancel", "overturn", "ruled out", "not awarded",
+                    ))
+                ):
+                    continue
             elif kind == "corner":
                 # Corner timeline rows are occasionally one display minute after
                 # the commentary. Allow that small offset, but only for a true
@@ -823,9 +850,48 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
                     continue
                 if kind not in ATTEMPT_KINDS and action_kind == "goal":
                     continue
+                # A generic same-minute comment is not adequate evidence for
+                # unrelated yellow cards, offsides, fouls and referee decisions.
+                if kind in {"card", "offside", "foul"} and action_kind != kind:
+                    continue
 
             text = str(comment.get("comment") or "")
             lower_text = text.casefold()
+            if kind in SHOT_LIKE_KINDS and kind != "woodwork":
+                named_shooter = commentary_player_for_role(text, "shooter")
+                if named_shooter is not None:
+                    stated_side = named_shooter.get("team_location")
+                    item_side = side(item)
+                    current_actor = player_for(item)
+                    if stated_side in {"home", "away"} and item_side in {"home", "away"} and stated_side != item_side:
+                        # The lone valid exception: provider labeled the
+                        # saver/blocker as the shooter (known data defect).
+                        outcome = (
+                            "save" if action_kind == "shot_on_target"
+                            else "block" if action_kind == "blocked_shot"
+                            else None
+                        )
+                        defender = (
+                            defensive_actor_from_comment(
+                                item, text, outcome, attacker_side=stated_side
+                            )
+                            if outcome else None
+                        )
+                        actor_is_defender = bool(
+                            current_actor and defender
+                            and str(current_actor.get("player_id")) == str(defender.get("player_id"))
+                        )
+                        if not actor_is_defender:
+                            continue
+                    elif (
+                        current_actor is not None
+                        and stated_side == item_side
+                        and str(current_actor.get("player_id")) != str(named_shooter.get("player_id"))
+                        and int(current_actor.get("position_id") or 0) != 24
+                    ):
+                        # Two different same-team shooters in one minute are
+                        # separate actions, not copies of one commentary.
+                        continue
             score = minute_delta * 2
             if scorer and scorer in lower_text:
                 score -= 5
@@ -3050,6 +3116,65 @@ def _selectable_events(game: dict[str, Any]) -> list[dict[str, Any]]:
         merged = [
             event for event in merged
             if id(event) not in redundant_woodwork_ids
+        ]
+
+    # A cancelled/disallowed penalty row can be the defensive-side referee
+    # annotation for a single shot, not another ball event. Fold it into the
+    # shot ONLY when there is exactly one shot in the same minute/period and
+    # neither record has an independent decision narrative. Preserve any
+    # ambiguous or independently described decisions as separate entries.
+    administrative_context_ids: set[int] = set()
+    for decision in merged:
+        if semantic_event_kind(decision) != "penalty_disallowed":
+            continue
+        if decision.get("commentary_id") is not None:
+            continue
+        choices = []
+        for attempt in merged:
+            if semantic_event_kind(attempt) not in {
+                "shot", "shot_on_target", "shot_off_target", "blocked_shot",
+            }:
+                continue
+            if attempt.get("minute") != decision.get("minute"):
+                continue
+            if attempt.get("extra_minute") != decision.get("extra_minute"):
+                continue
+            if (
+                attempt.get("period_id") is not None
+                and decision.get("period_id") is not None
+                and attempt.get("period_id") != decision.get("period_id")
+            ):
+                continue
+            if attempt.get("commentary_id") is None:
+                continue
+            choices.append(attempt)
+        if len(choices) != 1:
+            continue
+        shot = choices[0]
+        detail = dict(shot.get("detail") or {})
+        flags = list(detail.get("secondary_flags") or [])
+        if "penalty_disallowed" not in flags:
+            flags.append("penalty_disallowed")
+        detail["secondary_flags"] = flags
+        refs = list(detail.get("decision_event_ids") or [])
+        if decision.get("id") is not None and decision["id"] not in refs:
+            refs.append(decision["id"])
+        detail["decision_event_ids"] = refs
+        detail["decision_evidence_note"] = (
+            "A penalty cancellation was recorded during this attempt; "
+            "the referee decision is contextual, not an additional shot."
+        )
+        if decision.get("player_id") is not None:
+            detail["decision_player_id"] = decision["player_id"]
+            detail["decision_player_name"] = (
+                decision.get("player") or player_name_for_id(decision["player_id"])
+            )
+        shot["detail"] = detail
+        administrative_context_ids.add(id(decision))
+    if administrative_context_ids:
+        merged = [
+            event for event in merged
+            if id(event) not in administrative_context_ids
         ]
 
     # Corners/free-kicks are setup context when a following attempt explicitly
