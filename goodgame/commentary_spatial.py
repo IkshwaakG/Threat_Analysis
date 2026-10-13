@@ -206,7 +206,14 @@ def enrich_replays(
         if kind in SHOT_KINDS:
             shooter = next((p for p in players if event.get("player_id") is not None
                             and str(p.get("player_id")) == str(event["player_id"])), None)
-            shot_zone = _zone(narrative, target)
+            # Don't position the SHOOTER at the passer's wing merely because
+            # the same commentary later mentions a cross from that flank.
+            shooter_clause = re.split(
+                r"\b(?:assisted by|with [\w\s'-]+ providing the assist|"
+                r"assist(?: came)? from|cross from|crossed by)\b",
+                narrative, maxsplit=1, flags=re.IGNORECASE,
+            )[0]
+            shot_zone = _zone(shooter_clause, target)
             if shooter and (shot_zone or spatial.get("shot_actor_anchor")):
                 shooter_at = place(shooter, "shooter",
                                    shot_zone or spatial.get("shot_actor_anchor"),
@@ -230,10 +237,37 @@ def enrich_replays(
 
             defender = next((p for p in players if spatial.get("outcome_actor_id") is not None
                              and str(p.get("player_id")) == str(spatial["outcome_actor_id"])), None)
+            outcome = spatial.get("outcome_kind")
+            if defender is None and outcome in {"save", "block"}:
+                # A named defensive actor is valid only on the opposing team.
+                reported = _match_player(
+                    narrative, players,
+                    r"\b(?:saved by|save by|blocked by|block by|deflected by)\b",
+                )
+                if reported and reported.get("team_id") != event.get("team_id"):
+                    defender = reported
+                    spatial["outcome_actor_id"] = reported.get("player_id")
+                    spatial["outcome_actor_name"] = reported.get("name")
+                    spatial["outcome_actor_team"] = reported.get("team_location")
+                    spatial["outcome_actor_role"] = (
+                        "Goalkeeper" if outcome == "save" else "Defender"
+                    )
+                    spatial["outcome_actor_identification_source"] = "commentary"
             if defender:
                 contact = spatial.get("outcome_actor_anchor")
+                if contact is None:
+                    shot_start = spatial.get("shot_actor_anchor")
+                    if shot_start:
+                        contact = _point(
+                            shot_start["x"] + direction * (
+                                12.0 if outcome == "block" else 20.0
+                            ),
+                            shot_start["y"] * .4 + 50.0 * .6,
+                        )
+                        spatial["outcome_actor_anchor"] = contact
+                        spatial["outcome_actor_anchor_source"] = "inferred_contact_area"
                 if contact:
-                    place(defender, "goalkeeper" if spatial.get("outcome_kind") == "save"
+                    place(defender, "goalkeeper" if outcome == "save"
                           else "blocker", contact, evidence="inferred_contact_area")
 
         if kind == "corner":
@@ -317,12 +351,41 @@ def enrich_replays(
             if taker:
                 place(taker, "corner_taker", start, evidence=wing_evidence)
             track = [start, receiver_at]
+            # If the linked commentary explicitly reports a header/shot and
+            # a direction or save, show the actual action sequence:
+            # corner delivery -> receiver's contact -> outcome. Otherwise
+            # stop at the receiver rather than invent a shot into the net.
+            if follow and receiver and re.search(
+                r"\b(?:header|heads|headed|shot|attempt)\b", combined.casefold()
+            ):
+                follow_lower = combined.casefold()
+                missed = re.search(
+                    r"\b(?:misses|missed|wide)\b.{0,22}\b(left|right)\b",
+                    follow_lower,
+                )
+                if missed:
+                    side_factor = -1 if missed.group(1) == "left" else 1
+                    lateral = (1 if attacks_right else -1) * side_factor
+                    shot_end = _point(target - direction * 0.8, 50 + 9 * lateral)
+                elif re.search(r"\b(?:saved|save by|saves)\b", follow_lower):
+                    shot_end = _point(target - direction * 2, 50)
+                elif re.search(r"\b(?:misses high|over the bar|too high)\b", follow_lower):
+                    shot_end = _point(target - direction * 0.8, 50)
+                else:
+                    shot_end = None
+                if shot_end:
+                    track.append(shot_end)
+                    spatial["shot_start_index"] = 1
+                    spatial["phases"] = [
+                        {"kind": "corner_delivery", "start_index": 0, "end_index": 1},
+                        {"kind": "shot", "start_index": 1, "end_index": 2},
+                    ]
             spatial.update({
                 "source": "commentary_coordinate_supported" if tracking_count else "commentary_inferred",
                 "anchor": start,
                 "ball_track": track,
                 "ball_path": {"start": start, "end": receiver_at},
-                "shot_start_index": 0,
+                "shot_start_index": spatial.get("shot_start_index", 0),
                 "corner_side_source": wing_evidence,
                 "reconstruction_note": (
                     "Corner delivery inferred from commentary; player locations are zone estimates, "
@@ -354,6 +417,26 @@ def enrich_replays(
                     {"kind": "delivery", "label": "Illustrative delivery toward box",
                      "evidence": "inferred_from_corner"},
                 ]
+
+        elif kind in {"offside", "foul"}:
+            # Comments may name passers, receivers, foulers and victims even
+            # though no event-specific player_positions were stored.
+            # Anchor them to described broad zones, not ball path endpoints.
+            zone = _zone(narrative, target)
+            if zone is None:
+                zone = _point(target - direction * (20 if kind == "offside" else 38), 50)
+            involved = _player_mentions(narrative, players)
+            for index, player in enumerate(involved[:3]):
+                role = "offside_player" if kind == "offside" and index == 0 else (
+                    "fouler" if kind == "foul" and index == 0 else "involved"
+                )
+                # Nearby actors are offset just enough not to overlap. No
+                # claim of precise positions without player tracking.
+                here = _point(zone["x"] - direction * min(4, index * 3),
+                              zone["y"] + min(6, index * 3))
+                place(player, role, here,
+                      evidence="commentary_zone" if _zone(narrative, target)
+                      else "inferred_action_area")
 
         if actors:
             spatial["actor_positions"] = actors
