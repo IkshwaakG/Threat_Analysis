@@ -133,6 +133,102 @@ def _support_samples(
     return [_point(row["x"] * scale, row["y"] * scale) for row in relevant]
 
 
+def _foul_ball_sample(
+    game: dict[str, Any], event: dict[str, Any],
+    comment: dict[str, Any],
+) -> tuple[dict[str, float] | None, dict[str, Any]]:
+    """Match ball sample to the available event clock, not first sample/minute.
+
+    Stored commentary has provider order and minute but generally NO seconds.
+    Estimate placement within that minute from ordered commentary. Never
+    describe that estimate as an exact foul or player tracking location.
+    """
+    minute_start = max(0, _clock(comment) * 60)
+    raw_clock = comment.get("timer") or comment.get("time")
+    exact_second = None
+    if isinstance(raw_clock, str):
+        match = re.fullmatch(r"(\d{1,3}):(\d{2})", raw_clock.strip())
+        if match:
+            exact_second = int(match.group(1)) * 60 + int(match.group(2))
+    if exact_second is None and comment.get("second") is not None:
+        try:
+            second = int(comment["second"])
+            if 0 <= second < 60:
+                exact_second = minute_start + second
+        except (TypeError, ValueError):
+            pass
+    current = [
+        c for c in game.get("commentary", []) or []
+        if isinstance(c, dict)
+        and c.get("minute") == comment.get("minute")
+        and c.get("extra_minute") == comment.get("extra_minute")
+    ]
+    current.sort(key=lambda c: (
+        int(c.get("sort_order") or 999999), str(c.get("id") or ""),
+    ))
+    rank = next((i for i, c in enumerate(current)
+                 if str(c.get("id")) == str(comment.get("id"))), None)
+    if rank is None:
+        rank = 0
+    estimate = minute_start + 60.0 * (rank + 0.5) / max(1, len(current))
+    target_second = float(exact_second) if exact_second is not None else estimate
+    rows = []
+    for coord in game.get("ball_coordinates", []) or []:
+        if not isinstance(coord, dict):
+            continue
+        try:
+            m, sec = str(coord["timer"]).split(":", 1)
+            timestamp = int(m) * 60 + int(sec)
+            x, y = float(coord["x"]), float(coord["y"])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if not all(math.isfinite(v) for v in (x, y)):
+            continue
+        if not minute_start <= timestamp < minute_start + 60:
+            continue
+        if (
+            event.get("period_id") is not None
+            and coord.get("period_id") is not None
+            and str(event["period_id"]) != str(coord["period_id"])
+        ):
+            continue
+        rows.append((timestamp, x, y))
+    if not rows:
+        return None, {
+            "basis": "no_matching_minute_ball_sample",
+            "commentary_order": comment.get("sort_order"),
+            "clock_minute": comment.get("minute"),
+            "estimated_time_seconds": round(target_second, 1),
+        }
+    sample_second, x, y = min(rows, key=lambda row: (
+        abs(row[0] - target_second), row[0],
+    ))
+    if exact_second is not None and abs(sample_second - target_second) > 15:
+        return None, {"basis": "coordinate_too_far_from_exact_comment_time"}
+    # Unlike the shot tracker, ball samples must be assessed in the context
+    # of this game's coordinate scale. Most Sportmonks records are in [0,1].
+    coordinate_rows = [
+        row for row in game.get("ball_coordinates", []) or []
+        if isinstance(row, dict) and row.get("x") is not None
+    ]
+    try:
+        fractional = all(-0.05 <= float(row[a]) <= 1.05 for row in coordinate_rows
+                         for a in ("x", "y"))
+    except (TypeError, ValueError, KeyError):
+        fractional = False
+    scale = 100 if fractional else 1
+    return _point(x * scale, y * scale), {
+        "basis": "exact_comment_time" if exact_second is not None
+        else "minute_commentary_order_estimate",
+        "commentary_order": comment.get("sort_order"),
+        "clock_minute": comment.get("minute"),
+        "estimated_time_seconds": round(target_second, 1),
+        "sample_time_seconds": sample_second,
+        "sample_offset_seconds": round(abs(sample_second - target_second), 1),
+        "confidence": "medium" if exact_second is not None else "low",
+    }
+
+
 def _nearby(
     point: dict[str, float], samples: list[dict[str, float]],
     radius: float = 10.0,
@@ -208,63 +304,41 @@ def enrich_replays(
         tracking_count = 0
 
         if kind == "foul":
-            # Fouls do not represent a ball traversal. A player can only be
-            # shown at an actual time-matched ball sample, never a guessed
-            # formation position or a random point on a synthetic path.
-            # The provider does not identify who possessed the ball at each
-            # timestamp, so this placement is contextual, not measured player
-            # tracking. Choose the fouled player when commentary says who won
-            # the free kick; otherwise use a single named participant.
-            first_sample = samples[0] if samples else None
-            event_clock = max(0, _clock(event) * 60)
-            explicit_samples = [
-                row for row in (game.get("ball_coordinates") or [])
-                if isinstance(row, dict)
-                and isinstance(row.get("timer"), str)
-                and re.fullmatch(r"\d{1,3}:\d{2}", row["timer"])
-                and event_clock <= (
-                    int(row["timer"].split(":")[0]) * 60
-                    + int(row["timer"].split(":")[1])
-                ) < event_clock + 60
-                and (
-                    event.get("period_id") is None
-                    or row.get("period_id") is None
-                    or str(row["period_id"]) == str(event["period_id"])
-                )
-            ]
-            if not explicit_samples:
-                first_sample = None
-            elif first_sample is not None:
-                # Use earliest sample in this actual minute (instead of the
-                # 20-second support period preceding it).
-                minute_points = _support_samples(
-                    {**game, "ball_coordinates": explicit_samples}, event,
-                )
-                first_sample = minute_points[0] if minute_points else None
-
+            # A foul creates NO ball trajectory. Where commentary identifies
+            # the free-kick winner, show ONLY that player at the closest
+            # period/minute-matched ball sample. This is NOT player tracking.
+            anchor, temporal_evidence = _foul_ball_sample(game, event, comment)
             actor = None
-            if first_sample:
-                text_lower = narrative.casefold()
-                if any(word in text_lower for word in ("earned a free kick", "wins a free kick",
-                                                        "won a free kick", "draws a foul",
-                                                        "fouled by", "is fouled")):
-                    actor = next((p for p in mentions
-                                  if str(p["name"]).casefold() in text_lower), None)
-                elif (match := re.search(r"\bfouls?\b", text_lower)):
-                    # Mentions are returned in lineup order, not text order.
-                    # In "Trai Hume fouls Mason Mount", the VICTIM is the
-                    # player named after the verb, regardless of squad order.
+            victim_id = detail.get("foul_victim_id")
+            if victim_id is not None:
+                actor = next((
+                    player for player in players
+                    if str(player.get("player_id")) == str(victim_id)
+                ), None)
+            if actor is None:
+                lower_text = narrative.casefold()
+                if re.search(r"\b(?:earns?|wins?|won|awarded|draws?)\b.{0,28}\bfree kick\b",
+                             lower_text):
+                    actor = sorted(
+                        mentions,
+                        key=lambda p: lower_text.find(str(p.get("name") or "").casefold()),
+                    )[0] if mentions else None
+                elif foul_match := re.search(r"\bfouls?\b", lower_text):
                     following = [
-                        p for p in mentions
-                        if text_lower.find(str(p["name"]).strip().casefold()) >= match.end()
+                        p for p in mentions if lower_text.find(
+                            str(p.get("name") or "").casefold()
+                        ) >= foul_match.end()
                     ]
                     if len(following) == 1:
                         actor = following[0]
-                elif len(mentions) == 1:
-                    actor = mentions[0]
-                if actor and actor.get("player_id") is not None:
-                    actors.append(_actor(actor, "fouled_player", first_sample,
-                                         "minute_ball_sample_context_not_player_tracking"))
+                elif re.search(r"\b(?:is fouled|was fouled|has been fouled)\b", lower_text):
+                    actor = sorted(
+                        mentions,
+                        key=lambda p: lower_text.find(str(p.get("name") or "").casefold()),
+                    )[0] if mentions else None
+            if anchor is not None and actor is not None and actor.get("player_id") is not None:
+                actors.append(_actor(actor, "fouled_player", anchor,
+                                     "time_matched_ball_context_not_player_tracking"))
             spatial.update({
                 "kind": "foul",
                 "source": "foul_position_only",
@@ -273,13 +347,14 @@ def enrich_replays(
                 "ball_track": [],
                 "actor_positions": actors,
                 "actor_placement_policy": "commentary_first",
-                "coordinate_support_points": len(explicit_samples),
+                "coordinate_support_points": 1 if anchor else 0,
+                "foul_location_evidence": temporal_evidence,
                 "reconstruction_note": (
-                    "Foul: no ball flight. Player shown only at a time-matched "
-                    "ball location; ball coordinates are not measured player positions."
+                    "Foul: no ball flight. The free-kick winner is shown near a "
+                    "time-matched BALL sample, not a tracked player position."
                     if actors else
-                    "Foul: no ball flight or player position displayed because "
-                    "the provider did not identify a time-matched ball location."
+                    "Foul: no ball flight. The commentary or coordinates do not "
+                    "establish a free-kick winner at a supported location."
                 ),
             })
             event["ball_track"] = []
