@@ -131,13 +131,35 @@ def commentary_simulations(
         if actor is None and len(mentions) == 1:
             actor = mentions[0]
         team_id = actor.get("team_id") if actor else None
-        if team_id is None:
-            mentioned_teams = [
-                team for team in teams
-                if team.get("name") and str(team["name"]).casefold() in lower
+        mentioned_teams = [
+            team for team in teams
+            if team.get("name") and str(team["name"]).casefold() in lower
+        ]
+        if action == "corner":
+            # In "Corner awarded to Home after Defender concedes", the named
+            # defender belongs to Away. Awarding team overrides his identity.
+            award = [
+                team for team in mentioned_teams
+                if re.search(
+                    r"\\bcorner awarded to\\s+" + re.escape(str(team["name"]).casefold())
+                    + r"\\b|\\b" + re.escape(str(team["name"]).casefold())
+                    + r"\\s+(?:wins?|awarded) (?:a )?corner\\b",
+                    lower,
+                )
             ]
-            if len(mentioned_teams) == 1:
+            if len(award) == 1:
+                team_id = award[0].get("id")
+                actor = None  # A conceding defender is not the corner taker.
+            elif len(mentioned_teams) == 1:
                 team_id = mentioned_teams[0].get("id")
+                actor = None
+            else:
+                # Without reliable beneficiary data, don't infer the corner
+                # taker's team from an opposing defender's mention.
+                team_id = None
+                actor = None
+        elif team_id is None and len(mentioned_teams) == 1:
+            team_id = mentioned_teams[0].get("id")
         if team_id is None:
             continue
         try:
