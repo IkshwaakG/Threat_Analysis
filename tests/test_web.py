@@ -841,12 +841,12 @@ class GoodGameWebTests(unittest.TestCase):
 
         events = [event for event in _selectable_events(game) if event.get("minute") == 25]
 
-        self.assertEqual(len(events), 2)
-        woodwork = next(event for event in events if event.get("id") == 1001)
-        self.assertEqual(woodwork["spatial"]["kind"], "woodwork")
-        self.assertEqual(woodwork["display_type"], "Woodwork")
-        self.assertIsNone(woodwork.get("commentary_id"))
-        shot = next(event for event in events if event.get("id") == 1002)
+        self.assertEqual(len(events), 1)
+        shot = events[0]
+        self.assertEqual(shot["id"], 1002)
+        self.assertEqual(shot["detail"]["secondary_flags"], ["woodwork"])
+        self.assertEqual(shot["detail"]["woodwork_stat_ids"], [1001])
+        self.assertIn("unverified", shot["detail"]["outcome_evidence_note"])
         self.assertEqual(shot["spatial"]["kind"], "shot_on_target")
         self.assertEqual(shot["display_type"], "Shot On Target")
         self.assertEqual(shot["player"], "Bruno Fernandes")
@@ -858,6 +858,113 @@ class GoodGameWebTests(unittest.TestCase):
         self.assertEqual(shot["detail"]["goal_height_ratio"], 0.82)
         self.assertLess(shot["spatial"]["ball_path"]["end"]["x"], 100.0)
         self.assertGreater(shot["spatial"]["ball_path"]["end"]["y"], 50.0)
+
+    def test_separate_same_minute_shots_keep_distinct_shooters(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {"player_id": 10, "name": "Shooter A", "team_id": 1,
+                 "team_location": "home", "position_id": 27},
+                {"player_id": 11, "name": "Shooter B", "team_id": 1,
+                 "team_location": "home", "position_id": 27},
+            ],
+            "events": [
+                {"id": 111, "minute": 25, "team_id": 1, "player_id": 10,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+                {"id": 112, "minute": 25, "team_id": 1, "player_id": 11,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+            ],
+            "timeline": [],
+            "commentary": [
+                {"id": 301, "minute": 25,
+                 "comment": "Shooter A takes a shot on target.",
+                 "sort_order": 1},
+                {"id": 302, "minute": 25,
+                 "comment": "Shooter B takes a shot on target.",
+                 "sort_order": 2},
+            ],
+            "ball_coordinates": [],
+        }
+        shots = [
+            event for event in _selectable_events(game)
+            if (event.get("spatial") or {}).get("kind") == "shot_on_target"
+        ]
+        self.assertEqual({event["id"] for event in shots}, {111, 112})
+
+    def test_distinct_commentary_woodwork_remains_separate_attempt(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {"player_id": 10, "name": "Shooter", "team_id": 1,
+                 "team_location": "home", "position_id": 27},
+            ],
+            "events": [],
+            "timeline": [
+                {"id": 201, "minute": 25, "team_id": 1, "player_id": 10,
+                 "type": "Woodwork", "text": "Woodwork"},
+                {"id": 202, "minute": 25, "team_id": 1, "player_id": 10,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+            ],
+            "commentary": [
+                {"id": 401, "minute": 25,
+                 "comment": "Shooter hits the left post.", "sort_order": 1},
+                {"id": 402, "minute": 25,
+                 "comment": "Shooter has another shot saved by the goalkeeper.",
+                 "sort_order": 2},
+            ],
+            "ball_coordinates": [],
+        }
+        results = _selectable_events(game)
+        self.assertEqual(len([e for e in results if e.get("id") in {201, 202}]), 2)
+
+    def test_contextual_events_show_disclosed_ball_traversal(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [
+                {"player_id": 20, "name": "Defender", "team_id": 2,
+                 "team_location": "away", "position_id": 25},
+            ],
+            "events": [
+                {"id": 601, "minute": 12, "team_id": 2, "player_id": 20,
+                 "type": "Yellow Card", "text": "Yellow Card"},
+                {"id": 602, "minute": 23, "team_id": 2,
+                 "type": "Offside", "text": "Offside"},
+                {"id": 603, "minute": 24, "team_id": 2,
+                 "type": "Foul", "text": "Foul"},
+            ],
+            "timeline": [], "commentary": [], "ball_coordinates": [],
+        }
+        events = _selectable_events(game)
+        self.assertEqual(len(events), 3)
+        for event in events:
+            self.assertEqual(event["spatial"]["source"], "context_inferred")
+            self.assertEqual(len(event["spatial"]["ball_track"]), 2)
+            self.assertNotEqual(event["spatial"]["ball_track"][0],
+                                event["spatial"]["ball_track"][1])
+            self.assertIn("Illustrative", event["spatial"]["reconstruction_note"])
+
+    def test_penalty_area_is_not_a_penalty_kick(self):
+        game = {
+            "home_team": {"id": 1, "name": "Home"},
+            "away_team": {"id": 2, "name": "Away"},
+            "players": [],
+            "events": [
+                {"id": 700, "minute": 25, "team_id": 1,
+                 "type": "Shot On Target", "text": "Shot On Target"},
+            ],
+            "timeline": [],
+            "commentary": [
+                {"id": 710, "minute": 25,
+                 "comment": "A right-footed shot from outside the penalty area is saved.",
+                 "sort_order": 1},
+            ],
+            "ball_coordinates": [],
+        }
+        event = _selectable_events(game)[0]
+        self.assertNotEqual((event["detail"] or {}).get("situation"), "Penalty")
 
     def test_goalkeeper_provider_actor_is_replaced_by_commentary_shooter(self):
         game = {
