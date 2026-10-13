@@ -62,6 +62,21 @@ class FoulIncidentTests(unittest.TestCase):
         self.assertEqual(set(rows[0]["detail"]["foul_commentary_ids"]), {102, 103})
         self.assertEqual(rows[0]["commentary_id"], 103)
 
+    def test_earned_free_kick_is_recognized_as_foul_won(self):
+        game = data([
+            {"id": 120, "minute": 27, "sort_order": 40,
+             "comment": "Away Player fouls Home Player."},
+            {"id": 121, "minute": 27, "sort_order": 41,
+             "comment": "Home Player earned a free kick in the defensive half."},
+        ])
+        merged = reconcile_fouls([
+            foul(20, 120, 2, 3), foul(21, 121, 1, 14),
+        ], game)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["commentary_id"], 121)
+        self.assertEqual(merged[0]["detail"]["foul_victim_id"], 1)
+        self.assertEqual(merged[0]["detail"]["foul_offender_id"], 2)
+
     def test_separate_fouls_in_one_minute_not_merged(self):
         game = data([
             {"id": 104, "minute": 27, "sort_order": 40,
