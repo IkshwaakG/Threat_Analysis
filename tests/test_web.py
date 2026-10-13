@@ -2210,3 +2210,5 @@ def test_corner_track_rejects_large_provider_jump():
 
     assert distance(start, good) < 34.0
     assert distance(good, bad) > 34.0
+
+# Validate factual VAR/corner/shot separation.
